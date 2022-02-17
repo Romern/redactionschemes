@@ -33,7 +33,7 @@ func (c PartitionedData) Hash() []byte {
 }
 
 func (c PartitionedData) Redact(mismatches map[int]bool) (*PartitionedData, error) {
-	var new_chunk PartitionedData
+	new_chunk := make(PartitionedData, len(c))
 	copy(new_chunk, c)
 	for k := range mismatches {
 		if k >= len(c) {
