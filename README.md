@@ -10,6 +10,8 @@ This library includes 3 verifiable redaction schemes:
 
 Currently, all schemes use SHA256 for hashing, and the Merkle and Naive scheme use ECDSA for signing.
 
+For examples, look at the tests.
+
 ## Partitioning
 
 To keep the signatures small and the sign/verify/redact operations efficient, the input data is stored in partitions of data.
