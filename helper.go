@@ -131,10 +131,10 @@ func StringToPartitionedData(s string) PartitionedData {
 func Base64ImageToByteArray(image_base64encoded string) ([]byte, error) {
 	split_data := strings.Split(image_base64encoded, ",")
 	if len(split_data) != 2 {
-		return nil, fmt.Errorf("Input string is not in a valid format, i.e. data:image/*;base64,*")
+		return nil, fmt.Errorf("input string is not in a valid format, i.e. 'data:image/*;base64,*'")
 	}
 	if !strings.HasPrefix(image_base64encoded, "data:image/") || !strings.HasSuffix(split_data[0], "base64") {
-		return nil, fmt.Errorf("Format not correct, should start with 'data:image/*;base64,")
+		return nil, fmt.Errorf("format not correct, should start with 'data:image/*;base64,'")
 	}
 	return base64.StdEncoding.DecodeString(split_data[1])
 }
@@ -160,7 +160,7 @@ func (c PartitionedData) ToDataURL(chunksX int, chunksY int) (string, error) {
 	writer := bufio.NewWriter(&buf)
 	err = jpeg.Encode(writer, final_img, &jpeg.Options{Quality: 100})
 	if err != nil {
-		return "", fmt.Errorf("Error while encoding final jpeg: %s", err)
+		return "", fmt.Errorf("error while encoding final jpeg: %s", err)
 	}
 	writer.Flush()
 	buf_bytes := buf.Bytes()
@@ -179,7 +179,7 @@ func (c PartitionedData) ToImage(chunksX int, chunksY int) (image.Image, error) 
 		} else {
 			image_data, _, err := image.Decode(bytes.NewReader(v))
 			if err != nil {
-				return nil, fmt.Errorf("Error while decoding image: %s", err)
+				return nil, fmt.Errorf("error while decoding image: %s", err)
 			}
 			img_chunks[i] = image_data
 		}
@@ -220,7 +220,7 @@ func ImageToPartitionedData(img image.Image, chunksX int, chunksY int) (Partitio
 			writer := bufio.NewWriter(&buf)
 			err := jpeg.Encode(writer, cropped_img, &jpeg.Options{Quality: 100})
 			if err != nil {
-				return nil, fmt.Errorf("Error while encoding a chunk to jpeg: %s", err)
+				return nil, fmt.Errorf("error while encoding a chunk to jpeg: %s", err)
 			}
 			writer.Flush()
 			out[i*chunksX+j] = buf.Bytes()
@@ -235,7 +235,7 @@ func CommaSeperatedIndicesToMismatchesMap(s string) (map[int]bool, error) {
 	for _, v := range mismatch_s {
 		int_s, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("Could not parse an index: %s", err.Error())
+			return nil, fmt.Errorf("could not parse an index: %s", err.Error())
 		}
 		mismatches[int_s] = true
 	}
@@ -248,7 +248,7 @@ func CommaSeperatedIndicesArray(s string) ([]int, error) {
 	for _, v := range mismatch_s {
 		int_s, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("Could not parse an index: %s", err.Error())
+			return nil, fmt.Errorf("could not parse an index: %s", err.Error())
 		}
 		mismatches = append(mismatches, int_s)
 	}
@@ -264,7 +264,7 @@ func CommaSeperatedIndicesToBoolMatrix(s string, m, n int) ([][]bool, error) {
 	for _, v := range indices {
 		index, err := strconv.Atoi(v)
 		if err != nil {
-			return nil, fmt.Errorf("Index could is not an integer! %s", err)
+			return nil, fmt.Errorf("index could is not an integer! %s", err)
 		}
 		outputMatrix[index/m][index%m] = true
 	}
@@ -290,10 +290,10 @@ func BoolArrayToImage(inputMatrix [][]bool, bounds image.Rectangle) image.Image 
 func ArgDiffArray(arr_1 *PartitionedData, arr_2 *PartitionedData) (map[int]bool, error) {
 	ret := make(map[int]bool, 0)
 	if len(*arr_1) != len(*arr_2) {
-		return nil, fmt.Errorf("Array size does not match!")
+		return nil, fmt.Errorf("array size does not match")
 	}
 	for i := range *arr_1 {
-		if bytes.Compare((*arr_1)[i], (*arr_2)[i]) != 0 {
+		if !bytes.Equal((*arr_1)[i], (*arr_2)[i]) {
 			ret[i] = true
 		}
 	}

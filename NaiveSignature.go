@@ -30,7 +30,7 @@ type naiveSignatureSerialized struct {
 
 func (sig NaiveSignature) Verify(data *PartitionedData) error {
 	if sig.Length != len(*data) {
-		return fmt.Errorf("Signature length does not match data lengh!")
+		return fmt.Errorf("signature length does not match data lengh")
 	}
 	identifier_bytes := sig.Identifier
 	length_bytes := big.NewInt(int64(len(*data))).Bytes()
@@ -39,7 +39,7 @@ func (sig NaiveSignature) Verify(data *PartitionedData) error {
 	base_sig_hash.Write(identifier_bytes)
 	verified := ecdsa.VerifyASN1(&sig.PublicKey, base_sig_hash.Sum(nil), sig.BaseSignature)
 	if !verified {
-		return fmt.Errorf("Verifying failed!")
+		return fmt.Errorf("verifying of base signature failed")
 	}
 	for i := 0; i < len(*data); i++ {
 		if len((*data)[i]) != 0 {
@@ -49,15 +49,14 @@ func (sig NaiveSignature) Verify(data *PartitionedData) error {
 			cur_sig_hash.Write((*data)[i])
 			verified := ecdsa.VerifyASN1(&sig.PublicKey, cur_sig_hash.Sum(nil), sig.Signatures[i])
 			if !verified {
-				return fmt.Errorf("Verifying failed!")
+				return fmt.Errorf("verifying of a partition failed")
 			}
 		}
 	}
 	return nil
 }
 
-func SignNaivSignature(data *PartitionedData, priv_key *ecdsa.PrivateKey) (NaiveSignature, error) {
-	var out NaiveSignature
+func SignNaivSignature(data *PartitionedData, priv_key *ecdsa.PrivateKey) (*NaiveSignature, error) {
 	//Create Random Identifier:
 	identifier_bytes := data.Hash()
 	length_bytes := big.NewInt(int64(len(*data))).Bytes()
@@ -67,7 +66,7 @@ func SignNaivSignature(data *PartitionedData, priv_key *ecdsa.PrivateKey) (Naive
 	base_sig_hash.Write(identifier_bytes)
 	signature, err := ecdsa.SignASN1(rand.Reader, priv_key, base_sig_hash.Sum(nil))
 	if err != nil {
-		return out, nil
+		return nil, err
 	}
 	signatures := make([][]byte, len(*data))
 	for i := 0; i < len(*data); i++ {
@@ -77,17 +76,18 @@ func SignNaivSignature(data *PartitionedData, priv_key *ecdsa.PrivateKey) (Naive
 		cur_sig_hash.Write((*data)[i])
 		cur_sig, err := ecdsa.SignASN1(rand.Reader, priv_key, cur_sig_hash.Sum(nil))
 		if err != nil {
-			return out, nil
+			return nil, err
 		}
 		signatures[i] = cur_sig
 	}
-	return NaiveSignature{
+	out := NaiveSignature{
 		Identifier:    identifier_bytes,
 		Length:        len(*data),
 		BaseSignature: signature,
 		Signatures:    signatures,
 		PublicKey:     priv_key.PublicKey,
-	}, nil
+	}
+	return &out, nil
 }
 
 func (sig NaiveSignature) Marshal() (string, error) {
@@ -107,36 +107,36 @@ func (sig NaiveSignature) Marshal() (string, error) {
 	return string(out), err
 }
 
-func UnmarshalNaiveSignature(sig_string string) (NaiveSignature, error) {
+func UnmarshalNaiveSignature(sig_string string) (*NaiveSignature, error) {
 	var marsh naiveSignatureSerialized
-	var unmarsh NaiveSignature
 	err := json.Unmarshal([]byte(sig_string), &marsh)
 	if err != nil {
-		return unmarsh, err
+		return nil, err
 	}
 	base_sig_bytes, err := base64.StdEncoding.DecodeString(marsh.BaseSignature)
 	if err != nil {
-		return unmarsh, err
+		return nil, err
 	}
 	identifier_bytes, err := base64.StdEncoding.DecodeString(marsh.Identifier)
 	if err != nil {
-		return unmarsh, err
+		return nil, err
 	}
 	signatures := make([][]byte, len(marsh.Signature))
 	for i := 0; i < len(marsh.Signature); i++ {
 		sig_bytes, err := base64.StdEncoding.DecodeString(marsh.Signature[i])
 		if err != nil {
-			return unmarsh, err
+			return nil, err
 		}
 		signatures[i] = sig_bytes
 	}
 	pub_bytes, err := base64.StdEncoding.DecodeString(marsh.PublicKey)
 	if err != nil {
-		return unmarsh, fmt.Errorf("Error while decoding PublicKey bytes: %s", err)
+		return nil, fmt.Errorf("error while decoding PublicKey bytes: %s", err)
 	}
 	pub, err := x509.ParsePKIXPublicKey(pub_bytes)
 	if err != nil {
-		return unmarsh, fmt.Errorf("Error while parsing PublicKey: %s", err)
+		return nil, fmt.Errorf("error while parsing PublicKey: %s", err)
 	}
-	return NaiveSignature{identifier_bytes, marsh.Length, base_sig_bytes, signatures, *pub.(*ecdsa.PublicKey)}, nil
+	out := NaiveSignature{identifier_bytes, marsh.Length, base_sig_bytes, signatures, *pub.(*ecdsa.PublicKey)}
+	return &out, nil
 }

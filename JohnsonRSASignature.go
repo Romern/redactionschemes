@@ -43,38 +43,39 @@ func (sig JohnsonRSASignature) Marshal() (string, error) {
 	return string(out_bytes), err
 }
 
-func UnmarshalJohnsonRSASignature(input string) (JohnsonRSASignature, error) {
+func UnmarshalJohnsonRSASignature(input string) (*JohnsonRSASignature, error) {
 	var marshaled johnsonRSASignatureSerialized
 	err := json.Unmarshal([]byte(input), &marshaled)
 	if err != nil {
-		return JohnsonRSASignature{}, err
+		return nil, err
 	}
 	DocumentKey, err := base64.StdEncoding.DecodeString(marshaled.DocumentKey)
 	if err != nil {
-		return JohnsonRSASignature{}, err
+		return nil, err
 	}
 	BaseSignature, succ := big.NewInt(0).SetString(marshaled.BaseSignature, 10)
 	if !succ {
-		return JohnsonRSASignature{}, fmt.Errorf("Failed to parse BaseSignature as big.Int, %s", input)
+		return nil, fmt.Errorf("failed to parse BaseSignature as big.Int, %s", input)
 	}
 	Generator, succ := big.NewInt(0).SetString(marshaled.Generator, 10)
 	if !succ {
-		return JohnsonRSASignature{}, fmt.Errorf("Failed to parse Generator as big.Int, %s", input)
+		return nil, fmt.Errorf("failed to parse Generator as big.Int, %s", input)
 	}
 	PublicKeyBytes, err := base64.StdEncoding.DecodeString(marshaled.PublicKey)
 	if err != nil {
-		return JohnsonRSASignature{}, err
+		return nil, err
 	}
 	PublicKey, err := x509.ParsePKCS1PublicKey(PublicKeyBytes)
 	if err != nil {
-		return JohnsonRSASignature{}, fmt.Errorf("Error while parsing PublicKey: %s", err)
+		return nil, fmt.Errorf("error while parsing PublicKey: %s", err)
 	}
-	return JohnsonRSASignature{
+	out := JohnsonRSASignature{
 		DocumentKey:   DocumentKey,
 		BaseSignature: *BaseSignature,
 		Generator:     *Generator,
 		PublicKey:     *PublicKey,
-	}, nil
+	}
+	return &out, nil
 }
 
 func newDetermRand(seed []byte) io.Reader {
@@ -116,7 +117,7 @@ func multHOrdered(Input *PartitionedData, Identifier []byte) *big.Int {
 }
 
 //Signs the input data according to the paper
-func SignJohnsonRSA(random io.Reader, x *PartitionedData, priv *rsa.PrivateKey, phi *big.Int) JohnsonRSASignature {
+func SignJohnsonRSA(random io.Reader, x *PartitionedData, priv *rsa.PrivateKey, phi *big.Int) *JohnsonRSASignature {
 	//fmt.Println("Beginning with generating coprime...")
 	//v := GenerateCoPrime(random, phi)
 	v := big.NewInt(int64(priv.E))
@@ -131,16 +132,17 @@ func SignJohnsonRSA(random io.Reader, x *PartitionedData, priv *rsa.PrivateKey, 
 	//fmt.Println("Finished with mod inverse...")
 	var vExp big.Int
 	vExp = *vExp.Exp(v, hU, priv.N)
-	return JohnsonRSASignature{
+	sig := JohnsonRSASignature{
 		DocumentKey:   identifier,
 		BaseSignature: vExp,
 		Generator:     *v,
 		PublicKey:     priv.PublicKey,
 	}
+	return &sig
 }
 
 //Redacts an existing signature by mutliplying it with the removed hashes
-func (sig JohnsonRSASignature) Redact(RemovedIndices []int, x *PartitionedData) (PartitionedData, JohnsonRSASignature) {
+func (sig JohnsonRSASignature) Redact(RemovedIndices []int, x *PartitionedData) (*PartitionedData, *JohnsonRSASignature) {
 	var temp big.Int
 	var newV big.Int
 	j := 0
@@ -158,12 +160,13 @@ func (sig JohnsonRSASignature) Redact(RemovedIndices []int, x *PartitionedData) 
 	}
 	hash := multHOrdered(&redactX, sig.DocumentKey)
 	newV = *temp.Exp(&sig.BaseSignature, hash, sig.PublicKey.N)
-	return newX, JohnsonRSASignature{
+	new_sig := JohnsonRSASignature{
 		DocumentKey:   sig.DocumentKey,
 		BaseSignature: newV,
 		Generator:     sig.Generator,
 		PublicKey:     sig.PublicKey,
 	}
+	return &newX, &new_sig
 }
 
 //Verifies a signature according to the paper

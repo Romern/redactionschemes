@@ -71,7 +71,7 @@ func bitStringToIndex(bitstring string) int64 {
 }
 
 //generateRedactionTree recursively generates the redaction tree
-func generateRedactionTree(parent johnsonNode, depth int, data *PartitionedData) johnsonNode {
+func generateRedactionTree(parent *johnsonNode, depth int, data *PartitionedData) *johnsonNode {
 	if depth == 0 {
 		// we are now at the leaf node and go back up the tree, so we set the data to the leafs
 		parent.Hash = H(append([]byte{0}, append(parent.Key, (*data)[bitStringToIndex(parent.Position)]...)...))
@@ -80,22 +80,24 @@ func generateRedactionTree(parent johnsonNode, depth int, data *PartitionedData)
 	new_seed := G(parent.Key)
 
 	left_position := parent.Position + "0"
-	left := generateRedactionTree(johnsonNode{
+	left_node := johnsonNode{
 		Key:      new_seed[:len(parent.Key)],
-		Parent:   &parent,
-		Position: left_position},
+		Parent:   parent,
+		Position: left_position}
+	left := generateRedactionTree(&left_node,
 		depth-1,
 		data)
 
 	right_position := parent.Position + "1"
-	right := generateRedactionTree(johnsonNode{
+	right_node := johnsonNode{
 		Key:      new_seed[len(parent.Key):],
-		Parent:   &parent,
-		Position: right_position},
+		Parent:   parent,
+		Position: right_position}
+	right := generateRedactionTree(&right_node,
 		depth-1,
 		data)
 
-	parent.Children = map[int]*johnsonNode{0: &left, 1: &right}
+	parent.Children = map[int]*johnsonNode{0: left, 1: right}
 	// Now we can calculate the hash value of the leafs merkle-tree-style
 	parent.Hash = H(append([]byte{1}, append(left.Hash, right.Hash...)...))
 	return parent
@@ -137,11 +139,12 @@ func (sig JohnsonMerkleSignature) Verify(data *PartitionedData) error {
 	length, data_padding := PadChunkArrayToTwoPow(data)
 	//This is the case when the signature is initial, so we have the root key included and can simply verify everything
 	if sig.Key != nil && len(sig.Key) > 0 {
-		tree := generateRedactionTree(johnsonNode{
+		main_node := johnsonNode{
 			Key:      sig.Key,
-			Position: ""},
+			Position: ""}
+		tree := generateRedactionTree(&main_node,
 			length,
-			&data_padding)
+			data_padding)
 		if !ecdsa.VerifyASN1(&sig.PublicKey, tree.Hash, sig.BaseSignature) {
 			return fmt.Errorf("verification failed! (initial signature)")
 		} else {
@@ -161,18 +164,19 @@ func (sig JohnsonMerkleSignature) Verify(data *PartitionedData) error {
 	})
 	//Second step: Calculate the hashes of the co-nodes by building the partial redaction tree
 	for _, v := range positions {
-		curNode := sig.RedactedKeys[v]
-		dataLength := length - len(curNode.Position)
+		cur_key := sig.RedactedKeys[v]
+		dataLength := length - len(cur_key.Position)
 
 		//co-nodes have a full partial tree, so calculate it first
-		tree := generateRedactionTree(johnsonNode{
-			Key:      curNode.Key,
-			Position: curNode.Position},
+		cur_node := johnsonNode{
+			Key:      cur_key.Key,
+			Position: cur_key.Position}
+		tree := generateRedactionTree(&cur_node,
 			dataLength,
-			&data_padding)
+			data_padding)
 
-		curNode.Hash = tree.Hash
-		sig.RedactedHash[v] = curNode
+		cur_key.Hash = tree.Hash
+		sig.RedactedHash[v] = cur_key
 	}
 
 	//Recursively retrive the hash of the other node. We should have all the relevant info at this point
@@ -187,9 +191,9 @@ func (sig JohnsonMerkleSignature) Verify(data *PartitionedData) error {
 }
 
 //pruneRedactionTree adds all relevant tree nodes needed for the redaction to redactedHashes based on if they are pruned
-func pruneRedactionTree(mismatches map[int]bool, node *johnsonNode, lowestLevel int, redactedHashes *map[string]*johnsonNode) {
+func pruneRedactionTree(mismatches map[int]bool, node *johnsonNode, lowestLevel int, redactedHashes map[string]*johnsonNode) {
 	if len(node.Position) == lowestLevel && mismatches[int(bitStringToIndex(node.Position))] {
-		(*redactedHashes)[node.Position] = node
+		redactedHashes[node.Position] = node
 		return
 	}
 
@@ -198,12 +202,12 @@ func pruneRedactionTree(mismatches map[int]bool, node *johnsonNode, lowestLevel 
 	}
 
 	if len(node.Position) != lowestLevel {
-		_, leftChildIn := (*redactedHashes)[node.Children[0].Position]
-		_, rightChildIn := (*redactedHashes)[node.Children[1].Position]
+		_, leftChildIn := redactedHashes[node.Children[0].Position]
+		_, rightChildIn := redactedHashes[node.Children[1].Position]
 		if leftChildIn && rightChildIn {
-			(*redactedHashes)[node.Position] = node
-			delete((*redactedHashes), node.Children[0].Position)
-			delete((*redactedHashes), node.Children[1].Position)
+			redactedHashes[node.Position] = node
+			delete(redactedHashes, node.Children[0].Position)
+			delete(redactedHashes, node.Children[1].Position)
 		}
 	}
 }
@@ -212,7 +216,7 @@ func pruneRedactionTree(mismatches map[int]bool, node *johnsonNode, lowestLevel 
 //When redacting, k_epsilon is not publicsed, as with it we could just calculate all the hashes
 //and possibly get access to the redacted data by bruteforcing or similar.
 //Instead, we just publicise the co-nodes keys, as well as the parent node of the redacted leaf
-func (orig_signature JohnsonMerkleSignature) Redact(old_data *PartitionedData, redacted_chunks map[int]bool) (JohnsonMerkleSignature, error) {
+func (orig_signature JohnsonMerkleSignature) Redact(old_data *PartitionedData, redacted_chunks map[int]bool) (*JohnsonMerkleSignature, error) {
 	something_is_redacted := false
 	for _, v := range redacted_chunks {
 		if v {
@@ -221,29 +225,30 @@ func (orig_signature JohnsonMerkleSignature) Redact(old_data *PartitionedData, r
 		}
 	}
 	if !something_is_redacted {
-		return orig_signature, nil
+		return &orig_signature, nil
 	}
 	var new_signature JohnsonMerkleSignature
 	err := orig_signature.Verify(old_data)
 	if err != nil {
-		return new_signature, fmt.Errorf("The old_data does not match the orig_signature! %s", err)
+		return &new_signature, fmt.Errorf("the old_data does not match the orig_signature! %s", err)
 	}
 	//extend to the length of a 2-pow (TODO: do not require this)
 	length, data_padding_old := PadChunkArrayToTwoPow(old_data)
 
 	if orig_signature.Key == nil || len(orig_signature.Key) == 0 {
-		return new_signature, fmt.Errorf("CURRENTLY REDACTING REDACTED SIGNATURES IS NOT SUPPORTED! Key empty!")
+		return &new_signature, fmt.Errorf("CURRENTLY REDACTING REDACTED SIGNATURES IS NOT SUPPORTED! Key empty")
 	}
 
-	tree := generateRedactionTree(johnsonNode{
+	node := johnsonNode{
 		Key:      orig_signature.Key,
-		Position: ""},
+		Position: ""}
+	tree := generateRedactionTree(&node,
 		length,
-		&data_padding_old)
+		data_padding_old)
 
 	if orig_signature.RedactedHash != nil && len(orig_signature.RedactedHash) > 0 {
 		//TODO: It should  be possible to further redact a redaction
-		return new_signature, fmt.Errorf("CURRENTLY REDACTING REDACTED SIGNATURES IS NOT SUPPORTED! Redacted Hash not empty!")
+		return &new_signature, fmt.Errorf("CURRENTLY REDACTING REDACTED SIGNATURES IS NOT SUPPORTED! Redacted Hash not empty")
 	}
 
 	redactedKeys := make(map[string]redactedProperty)
@@ -253,12 +258,12 @@ func (orig_signature JohnsonMerkleSignature) Redact(old_data *PartitionedData, r
 	//Check for consecutive redactions:
 	//If all children of a node are redacted, we just give the hash of the parent.
 	//We do this by pruning the nodes from the tree, starting at the lowest level.
-	pruneRedactionTree(redacted_chunks, &tree, length, &redactedNodes)
+	pruneRedactionTree(redacted_chunks, tree, length, redactedNodes)
 
 	//Retrive Conodes by going up the tree
 	for _, node := range redactedNodes {
 		if node.Hash == nil || len(node.Hash) == 0 {
-			return new_signature, fmt.Errorf("Some redacted node's Hash seems to be empty?!")
+			return &new_signature, fmt.Errorf("some redacted node's hash seems to be empty")
 		}
 		//Prepare final datastructure
 		redactedHash[node.Position] = redactedProperty{Hash: node.Hash, Position: node.Position}
@@ -276,9 +281,7 @@ func (orig_signature JohnsonMerkleSignature) Redact(old_data *PartitionedData, r
 
 	//Remove the keys of the nodes which are already included as hashes
 	for v := range redactedHash {
-		if _, ok := redactedKeys[v]; ok {
-			delete(redactedKeys, v)
-		}
+		delete(redactedKeys, v)
 	}
 
 	//Remove the redundant co-nodes which include all necessary hashes in their children, i.e. one of their prefixes is also in redactkeys
@@ -296,41 +299,49 @@ func (orig_signature JohnsonMerkleSignature) Redact(old_data *PartitionedData, r
 			delete(redactedKeys, v)
 		}
 	}
-
-	return JohnsonMerkleSignature{
+	out := JohnsonMerkleSignature{
 		BaseSignature: orig_signature.BaseSignature,
 		PublicKey:     orig_signature.PublicKey,
 		RedactedKeys:  redactedKeys,
-		RedactedHash:  redactedHash}, nil
+		RedactedHash:  redactedHash}
+
+	return &out, nil
 }
 
 //PadByteArrayToTwoPow pads a byte array two a length of power of two.
 //This is not actually needed, but makes generating and working with the tree way easier
-func PadChunkArrayToTwoPow(input *PartitionedData) (int, PartitionedData) {
+func PadChunkArrayToTwoPow(input *PartitionedData) (int, *PartitionedData) {
 	length := int(math.Ceil(math.Log2(float64((len(*input))))))
-	data_padding := append(*input)
+	var data_padding PartitionedData
+	data_padding = append(data_padding, *input...)
+
 	for i := 0; i < int(math.Pow(2.0, float64(length)))-len(*input); i++ {
 		data_padding = append(data_padding, []byte{})
 	}
-	return length, data_padding
+	return length, &data_padding
 }
 
 //SignJohnsonSignature uses the priv_key to sign data redactably.
 //Key size for each node is currently 128 bit, key is randomly generated
-func SignJohnsonSignature(data *PartitionedData, priv_key *ecdsa.PrivateKey) JohnsonMerkleSignature {
+func SignJohnsonSignature(data *PartitionedData, priv_key *ecdsa.PrivateKey) (*JohnsonMerkleSignature, error) {
 	prn := make([]byte, 16)
-	mathrand.Read(prn)
+	_, err := rand.Read(prn)
+	if err != nil {
+		return nil, err
+	}
 
 	//extend to the length of a 2-pow (TODO: do not require this)
 	length, data_padding := PadChunkArrayToTwoPow(data)
 
-	tree := generateRedactionTree(johnsonNode{
+	node := johnsonNode{
 		Key:      prn,
-		Position: ""},
+		Position: ""}
+	tree := generateRedactionTree(&node,
 		length,
-		&data_padding)
+		data_padding)
 	signature, _ := ecdsa.SignASN1(rand.Reader, priv_key, tree.Hash)
-	return JohnsonMerkleSignature{BaseSignature: signature, PublicKey: priv_key.PublicKey, Key: prn}
+	out := JohnsonMerkleSignature{BaseSignature: signature, PublicKey: priv_key.PublicKey, Key: prn}
+	return &out, nil
 }
 
 type redactedPropertySerialized struct {
@@ -378,7 +389,7 @@ func (sig JohnsonMerkleSignature) Marshal() (string, error) {
 	return string(out_bytes), err
 }
 
-func UnmarshalJohnsonMerkleSignature(sig_string string) (JohnsonMerkleSignature, error) {
+func UnmarshalJohnsonMerkleSignature(sig_string string) (*JohnsonMerkleSignature, error) {
 	var sig_serialized johnsonRedactableSignatureSerialized
 	var sig JohnsonMerkleSignature
 	err := json.Unmarshal([]byte(sig_string), &sig_serialized)
@@ -386,18 +397,18 @@ func UnmarshalJohnsonMerkleSignature(sig_string string) (JohnsonMerkleSignature,
 		sig_string_unquote, _ := strconv.Unquote(sig_string)
 		err := json.Unmarshal([]byte(sig_string_unquote), &sig_serialized)
 		if err != nil {
-			return sig, fmt.Errorf("Error while unmarshaling serialized Signature: %s: %s", err, sig_string)
+			return &sig, fmt.Errorf("error while unmarshaling serialized Signature: %s: %s", err, sig_string)
 		}
 	}
 	redacted_keys := make(map[string]redactedProperty)
 	for k, v := range sig_serialized.RedactedKeys {
 		key, err := base64.StdEncoding.DecodeString(v.Key)
 		if err != nil {
-			return sig, fmt.Errorf("Error while decoding Key: %s", err)
+			return &sig, fmt.Errorf("error while decoding Key: %s", err)
 		}
 		hash, err := base64.StdEncoding.DecodeString(v.Hash)
 		if err != nil {
-			return sig, fmt.Errorf("Error while decoding Hash: %s", err)
+			return &sig, fmt.Errorf("error while decoding Hash: %s", err)
 		}
 		redacted_keys[k] = redactedProperty{
 			Key:      key,
@@ -409,11 +420,11 @@ func UnmarshalJohnsonMerkleSignature(sig_string string) (JohnsonMerkleSignature,
 	for k, v := range sig_serialized.RedactedHash {
 		key, err := base64.StdEncoding.DecodeString(v.Key)
 		if err != nil {
-			return sig, fmt.Errorf("Error while decoding Key: %s", err)
+			return &sig, fmt.Errorf("error while decoding Key: %s", err)
 		}
 		hash, err := base64.StdEncoding.DecodeString(v.Hash)
 		if err != nil {
-			return sig, fmt.Errorf("Error while decoding Hash: %s", err)
+			return &sig, fmt.Errorf("error while decoding Hash: %s", err)
 		}
 		redacted_hash[k] = redactedProperty{
 			Key:      key,
@@ -424,20 +435,20 @@ func UnmarshalJohnsonMerkleSignature(sig_string string) (JohnsonMerkleSignature,
 
 	base_sig, err := base64.StdEncoding.DecodeString(sig_serialized.BaseSignature)
 	if err != nil {
-		return sig, fmt.Errorf("Error while decoding BaseSignature: %s", err)
+		return &sig, fmt.Errorf("error while decoding BaseSignature: %s", err)
 	}
 	pub_bytes, err := base64.StdEncoding.DecodeString(sig_serialized.PublicKey)
 	if err != nil {
-		return sig, fmt.Errorf("Error while decoding PublicKey bytes: %s", err)
+		return &sig, fmt.Errorf("error while decoding PublicKey bytes: %s", err)
 	}
 	pub, err := x509.ParsePKIXPublicKey(pub_bytes)
 	if err != nil {
-		return sig, fmt.Errorf("Error while parsing PublicKey: %s", err)
+		return &sig, fmt.Errorf("error while parsing PublicKey: %s", err)
 	}
 
 	key, err := base64.StdEncoding.DecodeString(sig_serialized.Key)
 	if err != nil {
-		return sig, fmt.Errorf("Error while decoding Key: %s", err)
+		return &sig, fmt.Errorf("error while decoding Key: %s", err)
 	}
 
 	out := JohnsonMerkleSignature{
@@ -448,16 +459,16 @@ func UnmarshalJohnsonMerkleSignature(sig_string string) (JohnsonMerkleSignature,
 		RedactedHash:  redacted_hash,
 	}
 
-	return out, nil
+	return &out, nil
 }
 
 //printTree prints the whole subtree with their respective hashes and positions (for debugging)
-func printTree(cur johnsonNode) {
+func printTree(cur *johnsonNode) {
 	if cur.Hash == nil {
 		return
 	}
 	println(cur.Position, "\t", hex.EncodeToString(cur.Hash))
 	for _, v := range cur.Children {
-		printTree(*v)
+		printTree(v)
 	}
 }

@@ -26,10 +26,9 @@ func TestJohnsonRSASignature(t *testing.T) {
 	}
 	fmt.Println("Pure verification was successful")
 	newChunks, newSig := sig.Redact([]int{1}, &dataToSign)
-	if !newSig.Verify(&newChunks) {
+	if !newSig.Verify(newChunks) {
 		t.Errorf("Failed to verify redacted data!")
 		return
 	}
 	fmt.Println("Redacted verification was successful")
-	return
 }
