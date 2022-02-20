@@ -1,6 +1,7 @@
 package redactionschemes
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
@@ -56,17 +57,23 @@ func (sig NaiveSignature) Verify(data *PartitionedData) error {
 	return nil
 }
 
-func SignNaivSignature(data *PartitionedData, priv_key *ecdsa.PrivateKey) (*NaiveSignature, error) {
-	//Create Random Identifier:
+func (this *NaiveSignature) Sign(data *PartitionedData, private_key *crypto.PrivateKey) error {
+	switch (*private_key).(type) {
+	case *ecdsa.PrivateKey:
+		break
+	default:
+		return fmt.Errorf("only ECDSA supported atm")
+	}
+	//Create Identifier based on the hash of the input data:
 	identifier_bytes := data.Hash()
 	length_bytes := big.NewInt(int64(len(*data))).Bytes()
 
 	base_sig_hash := sha256.New()
 	base_sig_hash.Write(length_bytes)
 	base_sig_hash.Write(identifier_bytes)
-	signature, err := ecdsa.SignASN1(rand.Reader, priv_key, base_sig_hash.Sum(nil))
+	signature, err := ecdsa.SignASN1(rand.Reader, (*private_key).(*ecdsa.PrivateKey), base_sig_hash.Sum(nil))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	signatures := make([][]byte, len(*data))
 	for i := 0; i < len(*data); i++ {
@@ -74,23 +81,25 @@ func SignNaivSignature(data *PartitionedData, priv_key *ecdsa.PrivateKey) (*Naiv
 		cur_sig_hash.Write(identifier_bytes)
 		cur_sig_hash.Write(big.NewInt(int64(i)).Bytes())
 		cur_sig_hash.Write((*data)[i])
-		cur_sig, err := ecdsa.SignASN1(rand.Reader, priv_key, cur_sig_hash.Sum(nil))
+		cur_sig, err := ecdsa.SignASN1(rand.Reader, (*private_key).(*ecdsa.PrivateKey), cur_sig_hash.Sum(nil))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		signatures[i] = cur_sig
 	}
-	out := NaiveSignature{
-		Identifier:    identifier_bytes,
-		Length:        len(*data),
-		BaseSignature: signature,
-		Signatures:    signatures,
-		PublicKey:     priv_key.PublicKey,
-	}
-	return &out, nil
+	this.Identifier = identifier_bytes
+	this.Length = len(*data)
+	this.BaseSignature = signature
+	this.Signatures = signatures
+	this.PublicKey = (*private_key).(*ecdsa.PrivateKey).PublicKey
+	return nil
 }
 
-func (sig NaiveSignature) Marshal() (string, error) {
+func (sig *NaiveSignature) Redact(redacted_indices []int, data *PartitionedData) (RedactableSignature, error) {
+	return sig, nil
+}
+
+func (sig *NaiveSignature) Marshal() (string, error) {
 	signatures := make([]string, len(sig.Signatures))
 	for i := 0; i < len(sig.Signatures); i++ {
 		signatures[i] = base64.StdEncoding.EncodeToString(sig.Signatures[i])
@@ -107,36 +116,40 @@ func (sig NaiveSignature) Marshal() (string, error) {
 	return string(out), err
 }
 
-func UnmarshalNaiveSignature(sig_string string) (*NaiveSignature, error) {
+func (this *NaiveSignature) Unmarshal(sig_string string) error {
 	var marsh naiveSignatureSerialized
 	err := json.Unmarshal([]byte(sig_string), &marsh)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	base_sig_bytes, err := base64.StdEncoding.DecodeString(marsh.BaseSignature)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	identifier_bytes, err := base64.StdEncoding.DecodeString(marsh.Identifier)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	signatures := make([][]byte, len(marsh.Signature))
 	for i := 0; i < len(marsh.Signature); i++ {
 		sig_bytes, err := base64.StdEncoding.DecodeString(marsh.Signature[i])
 		if err != nil {
-			return nil, err
+			return err
 		}
 		signatures[i] = sig_bytes
 	}
 	pub_bytes, err := base64.StdEncoding.DecodeString(marsh.PublicKey)
 	if err != nil {
-		return nil, fmt.Errorf("error while decoding PublicKey bytes: %s", err)
+		return fmt.Errorf("error while decoding PublicKey bytes: %s", err)
 	}
 	pub, err := x509.ParsePKIXPublicKey(pub_bytes)
 	if err != nil {
-		return nil, fmt.Errorf("error while parsing PublicKey: %s", err)
+		return fmt.Errorf("error while parsing PublicKey: %s", err)
 	}
-	out := NaiveSignature{identifier_bytes, marsh.Length, base_sig_bytes, signatures, *pub.(*ecdsa.PublicKey)}
-	return &out, nil
+	this.Identifier = identifier_bytes
+	this.Length = marsh.Length
+	this.BaseSignature = base_sig_bytes
+	this.Signatures = signatures
+	this.PublicKey = *pub.(*ecdsa.PublicKey)
+	return nil
 }

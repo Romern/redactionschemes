@@ -3,6 +3,7 @@ package redactionschemes
 import (
 	"bufio"
 	"bytes"
+	"crypto"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -13,17 +14,41 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"testing"
 )
 
+//PartitionedData is a wrapper for the input data to sign.
+//Depending on the structure of the data at hand, you might want to choose a different partition:
+//E.g. a partition for each field of a formular, or each word in a text.
+//Depending on the signature scheme you use, the amount of partitions can have an impact on the size and performance.
 type PartitionedData [][]byte
 
-//Cryptographic hash function (just sha256)
+//RedactableSignature provides the interface for redactable signatures.
+//
+//Sign creates the initial signature for data using the private_key.
+//Note, that not all schemes accept any type of private key.
+//
+//Redact creates a new signature, where the indices noted in redacted_indices are redacted.
+//Note, that data of corse needs to contain the data which is beeing redacted.
+//Note, that the new signature does not necessarily need to be new:
+//e.g. with NaiveSignature, a redaction does not change the signature.
+type RedactableSignature interface {
+	Sign(data *PartitionedData, private_key *crypto.PrivateKey) error
+	Redact(redacted_indices []int, data *PartitionedData) (RedactableSignature, error)
+	Verify(data *PartitionedData) error
+	Marshal() (string, error)
+	Unmarshal(input string) error
+}
+
+//H defines the base cryptographic hash function, which is currently just SHA256.
+//FIXME: Make this configurable?
 func H(InputBytes []byte) []byte {
 	seed_bytes := sha256.New()
 	seed_bytes.Write(InputBytes)
 	return seed_bytes.Sum(nil)
 }
 
+//Hash returns the SHA256 of the whole partitioned data.
 func (c PartitionedData) Hash() []byte {
 	seed_bytes := sha256.New()
 	for _, v := range c {
@@ -32,21 +57,20 @@ func (c PartitionedData) Hash() []byte {
 	return seed_bytes.Sum(nil)
 }
 
-func (c PartitionedData) Redact(mismatches map[int]bool) (*PartitionedData, error) {
+//Redact creates a copy of the data where the indices in redacted_indices are redacted.
+func (c PartitionedData) Redact(redacted_indices []int) (*PartitionedData, error) {
 	new_chunk := make(PartitionedData, len(c))
 	copy(new_chunk, c)
-	for k := range mismatches {
+	for _, k := range redacted_indices {
 		if k >= len(c) {
-			return &new_chunk, nil
-			//return nil, fmt.Errorf("Mismatch index is out of range!")
+			return nil, fmt.Errorf("redacted index is out of range")
 		}
-		if mismatches[k] {
-			new_chunk[k] = []byte{}
-		}
+		new_chunk[k] = []byte{}
 	}
 	return &new_chunk, nil
 }
 
+//Marshal creates a JSON/base64 encoded representation of the partitioned data.
 func (c PartitionedData) Marshal() (string, error) {
 	out_array := make([]string, len(c))
 	for i, v := range c {
@@ -56,6 +80,7 @@ func (c PartitionedData) Marshal() (string, error) {
 	return string(out_bytes), err
 }
 
+//UnmarshalPartitionedData unmarshales a JSON/base64 encoded representation of the partitioned data.
 func UnmarshalPartitionedData(s string) (*PartitionedData, error) {
 	var in_array []string
 	var out PartitionedData
@@ -74,6 +99,7 @@ func UnmarshalPartitionedData(s string) (*PartitionedData, error) {
 	return &out, nil
 }
 
+//ToByteArray returns a one-dimensional slice of all partitions.
 func (c PartitionedData) ToByteArray() []byte {
 	out := make([]byte, 0)
 	for _, v := range c {
@@ -82,19 +108,7 @@ func (c PartitionedData) ToByteArray() []byte {
 	return out
 }
 
-func (c PartitionedData) ToHTMLString() string {
-	//TODO: Unsafe, users could inject code easily
-	var out string
-	for _, v := range c {
-		if len(v) == 0 {
-			out += "&#9635;"
-		} else {
-			out += string(v) + " "
-		}
-	}
-	return out
-}
-
+//GetRedactedIndicesArray returns all indices of partitions where the bytecount is zero.
 func (c PartitionedData) GetRedactedIndicesArray() []int {
 	out := make([]int, 0)
 	for i, v := range c {
@@ -105,21 +119,7 @@ func (c PartitionedData) GetRedactedIndicesArray() []int {
 	return out
 }
 
-func (c PartitionedData) GetRedactedIndicesArrayImage(chunkX, chunkY int) []int {
-	out := make([]int, 0)
-	for i, v := range c {
-		if i >= chunkX*chunkY {
-			//ignore scaling of johnson
-			return out
-		}
-		if len(v) == 0 {
-			out = append(out, i)
-		}
-	}
-	return out
-}
-
-//StringToPartitionedData converts a string s to a chunk array word-wise
+//StringToPartitionedData partitions a string s word-wise
 func StringToPartitionedData(s string) PartitionedData {
 	var out PartitionedData
 	for _, v := range strings.Split(s, " ") {
@@ -128,6 +128,7 @@ func StringToPartitionedData(s string) PartitionedData {
 	return out
 }
 
+//Base64ImageToByteArray converts a base64-encoded image and converts it to a byte array.
 func Base64ImageToByteArray(image_base64encoded string) ([]byte, error) {
 	split_data := strings.Split(image_base64encoded, ",")
 	if len(split_data) != 2 {
@@ -139,8 +140,7 @@ func Base64ImageToByteArray(image_base64encoded string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(split_data[1])
 }
 
-//ToDataURLs will decode each image chunk, as we need reproducability at the end
-//The client has to stitch together the image if this is used
+//ToDataURLs will decode each partition as an data uri.
 func (c PartitionedData) ToDataURLs() []string {
 	out := make([]string, 0)
 	for _, v := range c {
@@ -151,6 +151,7 @@ func (c PartitionedData) ToDataURLs() []string {
 	return out
 }
 
+//ToDataURL converts the PartitionedData c with chunksX*chunksY image partitions into a whole base64-encoded data url.
 func (c PartitionedData) ToDataURL(chunksX int, chunksY int) (string, error) {
 	final_img, err := c.ToImage(chunksX, chunksY)
 	if err != nil {
@@ -169,6 +170,7 @@ func (c PartitionedData) ToDataURL(chunksX int, chunksY int) (string, error) {
 	return "data:" + contentType + ";base64," + encoded, nil
 }
 
+//ToImage converts the PartitionedData c with chunksX*chunksY image partitions into a whole image.
 func (c PartitionedData) ToImage(chunksX int, chunksY int) (image.Image, error) {
 	img_chunks := make([]image.Image, len(c))
 	for i, v := range c {
@@ -229,19 +231,7 @@ func ImageToPartitionedData(img image.Image, chunksX int, chunksY int) (Partitio
 	return out, nil
 }
 
-func CommaSeperatedIndicesToMismatchesMap(s string) (map[int]bool, error) {
-	mismatch_s := strings.Split(s, ",")
-	mismatches := make(map[int]bool)
-	for _, v := range mismatch_s {
-		int_s, err := strconv.Atoi(v)
-		if err != nil {
-			return nil, fmt.Errorf("could not parse an index: %s", err.Error())
-		}
-		mismatches[int_s] = true
-	}
-	return mismatches, nil
-}
-
+//CommaSeperatedIndicesArray takes a comma seperated string of indices and converts it into a slice of indices.
 func CommaSeperatedIndicesArray(s string) ([]int, error) {
 	mismatch_s := strings.Split(s, ",")
 	mismatches := make([]int, 0)
@@ -255,47 +245,32 @@ func CommaSeperatedIndicesArray(s string) ([]int, error) {
 	return mismatches, nil
 }
 
-func CommaSeperatedIndicesToBoolMatrix(s string, m, n int) ([][]bool, error) {
-	indices := strings.Split(s, ",")
-	outputMatrix := make([][]bool, m)
-	for i := 0; i < m; i++ {
-		outputMatrix[i] = make([]bool, n)
-	}
-	for _, v := range indices {
-		index, err := strconv.Atoi(v)
-		if err != nil {
-			return nil, fmt.Errorf("index could is not an integer! %s", err)
-		}
-		outputMatrix[index/m][index%m] = true
-	}
-	return outputMatrix, nil
-}
+//test signs, verifies, redacts, and verifies again.
+func test(t *testing.T, private_key crypto.PrivateKey, sig RedactableSignature) {
+	dataToSign := StringToPartitionedData("Test Description")
 
-func BoolArrayToImage(inputMatrix [][]bool, bounds image.Rectangle) image.Image {
-	input_img := image.NewRGBA(bounds)
-	blocksizeX := input_img.Rect.Max.X / len(inputMatrix)
-	blocksizeY := input_img.Rect.Max.Y / len(inputMatrix[0])
-	for i := 0; i < len(inputMatrix); i++ {
-		for j := 0; j < len(inputMatrix[i]); j++ {
-			if inputMatrix[i][j] {
-				draw.Draw(input_img, image.Rect(i*blocksizeX, j*blocksizeY, (i+1)*blocksizeX, (j+1)*blocksizeY), image.Black, image.ZP, draw.Src)
-			}
-		}
+	err := sig.Sign(&dataToSign, &private_key)
+	if err != nil {
+		t.Errorf("Failed to sign data! %s", err)
+		return
 	}
-	return input_img
-}
+	if err := sig.Verify(&dataToSign); err != nil {
+		t.Errorf("Failed to verify initial data! %s", err)
+		return
+	}
 
-//ArgDiffArray returns the indexes where arr_1 and arr_2 mismatch.
-//arr_1 and arr_2 have to be of the same size.
-func ArgDiffArray(arr_1 *PartitionedData, arr_2 *PartitionedData) (map[int]bool, error) {
-	ret := make(map[int]bool, 0)
-	if len(*arr_1) != len(*arr_2) {
-		return nil, fmt.Errorf("array size does not match")
+	newSig, err := sig.Redact([]int{1}, &dataToSign)
+	if err != nil {
+		t.Errorf("Failed to redact signature! %s", err)
+		return
 	}
-	for i := range *arr_1 {
-		if !bytes.Equal((*arr_1)[i], (*arr_2)[i]) {
-			ret[i] = true
-		}
+	newChunks, err := dataToSign.Redact([]int{1})
+	if err != nil {
+		t.Errorf("Failed to redact data! %s", err)
+		return
 	}
-	return ret, nil
+	if err := newSig.Verify(newChunks); err != nil {
+		t.Errorf("Failed to verify redacted data! %s", err)
+		return
+	}
 }

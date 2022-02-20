@@ -1,6 +1,7 @@
 package redactionschemes
 
 import (
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -17,8 +18,6 @@ import (
 
 //As introduced in "Homomorphic Signature Schemes" from Johnson et al.
 
-//GetNode traverses the tree by using bitstring: 0 is left, 1 is right
-
 type JohnsonRSASignature struct {
 	DocumentKey   []byte
 	BaseSignature big.Int
@@ -33,7 +32,7 @@ type johnsonRSASignatureSerialized struct {
 	PublicKey     string
 }
 
-func (sig JohnsonRSASignature) Marshal() (string, error) {
+func (sig *JohnsonRSASignature) Marshal() (string, error) {
 	out_bytes, err := json.Marshal(johnsonRSASignatureSerialized{
 		DocumentKey:   base64.StdEncoding.EncodeToString(sig.DocumentKey),
 		BaseSignature: sig.BaseSignature.String(),
@@ -43,39 +42,37 @@ func (sig JohnsonRSASignature) Marshal() (string, error) {
 	return string(out_bytes), err
 }
 
-func UnmarshalJohnsonRSASignature(input string) (*JohnsonRSASignature, error) {
+func (this *JohnsonRSASignature) Unmarshal(input string) error {
 	var marshaled johnsonRSASignatureSerialized
 	err := json.Unmarshal([]byte(input), &marshaled)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	DocumentKey, err := base64.StdEncoding.DecodeString(marshaled.DocumentKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	BaseSignature, succ := big.NewInt(0).SetString(marshaled.BaseSignature, 10)
 	if !succ {
-		return nil, fmt.Errorf("failed to parse BaseSignature as big.Int, %s", input)
+		return fmt.Errorf("failed to parse BaseSignature as big.Int, %s", input)
 	}
 	Generator, succ := big.NewInt(0).SetString(marshaled.Generator, 10)
 	if !succ {
-		return nil, fmt.Errorf("failed to parse Generator as big.Int, %s", input)
+		return fmt.Errorf("failed to parse Generator as big.Int, %s", input)
 	}
 	PublicKeyBytes, err := base64.StdEncoding.DecodeString(marshaled.PublicKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	PublicKey, err := x509.ParsePKCS1PublicKey(PublicKeyBytes)
 	if err != nil {
-		return nil, fmt.Errorf("error while parsing PublicKey: %s", err)
+		return fmt.Errorf("error while parsing PublicKey: %s", err)
 	}
-	out := JohnsonRSASignature{
-		DocumentKey:   DocumentKey,
-		BaseSignature: *BaseSignature,
-		Generator:     *Generator,
-		PublicKey:     *PublicKey,
-	}
-	return &out, nil
+	this.DocumentKey = DocumentKey
+	this.BaseSignature = *BaseSignature
+	this.Generator = *Generator
+	this.PublicKey = *PublicKey
+	return nil
 }
 
 func newDetermRand(seed []byte) io.Reader {
@@ -117,45 +114,47 @@ func multHOrdered(Input *PartitionedData, Identifier []byte) *big.Int {
 }
 
 //Signs the input data according to the paper
-func SignJohnsonRSA(random io.Reader, x *PartitionedData, priv *rsa.PrivateKey, phi *big.Int) *JohnsonRSASignature {
+func (this *JohnsonRSASignature) Sign(data *PartitionedData, private_key *crypto.PrivateKey) error {
+	switch (*private_key).(type) {
+	case *rsa.PrivateKey:
+		break
+	default:
+		return fmt.Errorf("only RSA supported atm")
+	}
+
+	phi := getEulerPhi((*private_key).(*rsa.PrivateKey))
 	//fmt.Println("Beginning with generating coprime...")
 	//v := GenerateCoPrime(random, phi)
-	v := big.NewInt(int64(priv.E))
+	v := big.NewInt(int64((*private_key).(*rsa.PrivateKey).E))
 	//fmt.Println("Finished with generating coprime...")
-	identifier := make([]byte, 16)
-	mathrand.Read(identifier)
+	identifier_bytes := data.Hash()
 	//fmt.Println("Calculating hash...")
-	hU := multHOrdered(x, identifier)
+	hU := multHOrdered(data, identifier_bytes)
 	//fmt.Println("Finished calculating hash...")
 	//fmt.Println("Beginning with mod inverse...")
 	hU.ModInverse(hU, phi)
 	//fmt.Println("Finished with mod inverse...")
 	var vExp big.Int
-	vExp = *vExp.Exp(v, hU, priv.N)
-	sig := JohnsonRSASignature{
-		DocumentKey:   identifier,
-		BaseSignature: vExp,
-		Generator:     *v,
-		PublicKey:     priv.PublicKey,
-	}
-	return &sig
+	vExp = *vExp.Exp(v, hU, (*private_key).(*rsa.PrivateKey).N)
+	this.DocumentKey = identifier_bytes
+	this.BaseSignature = vExp
+	this.Generator = *v
+	this.PublicKey = (*private_key).(*rsa.PrivateKey).PublicKey
+	return nil
 }
 
 //Redacts an existing signature by mutliplying it with the removed hashes
-func (sig JohnsonRSASignature) Redact(RemovedIndices []int, x *PartitionedData) (*PartitionedData, *JohnsonRSASignature) {
+func (sig *JohnsonRSASignature) Redact(redacted_indices []int, data *PartitionedData) (RedactableSignature, error) {
 	var temp big.Int
 	var newV big.Int
 	j := 0
-	newX := make(PartitionedData, len(*x))
-	redactX := make(PartitionedData, len(*x))
-	for i, v := range *x {
-		if j < len(RemovedIndices) && i == RemovedIndices[j] {
+	redactX := make(PartitionedData, len(*data))
+	for i, v := range *data {
+		if j < len(redacted_indices) && i == redacted_indices[j] {
 			redactX[i] = v
-			newX[i] = []byte{}
 			j++
 		} else {
 			redactX[i] = []byte{}
-			newX[i] = v
 		}
 	}
 	hash := multHOrdered(&redactX, sig.DocumentKey)
@@ -166,18 +165,21 @@ func (sig JohnsonRSASignature) Redact(RemovedIndices []int, x *PartitionedData) 
 		Generator:     sig.Generator,
 		PublicKey:     sig.PublicKey,
 	}
-	return &newX, &new_sig
+	return &new_sig, nil
 }
 
 //Verifies a signature according to the paper
-func (sig JohnsonRSASignature) Verify(x *PartitionedData) bool {
+func (sig *JohnsonRSASignature) Verify(data *PartitionedData) error {
 	var v big.Int
-	hash := multHOrdered(x, sig.DocumentKey)
+	hash := multHOrdered(data, sig.DocumentKey)
 	v.Exp(&sig.BaseSignature, hash, sig.PublicKey.N)
-	return v.Cmp(&sig.Generator) == 0
+	if v.Cmp(&sig.Generator) == 0 {
+		return nil
+	}
+	return fmt.Errorf("failed to verify: base signature does not match data")
 }
 
-func GetEulerPhi(priv *rsa.PrivateKey) *big.Int {
+func getEulerPhi(priv *rsa.PrivateKey) *big.Int {
 	one := big.NewInt(1)
 	temp := big.NewInt(1)
 	out := big.NewInt(1)
