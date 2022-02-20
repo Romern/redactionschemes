@@ -310,11 +310,9 @@ func PadChunkArrayToTwoPow(input *PartitionedData) (int, *PartitionedData) {
 }
 
 //Sign uses the private_key to sign data redactably.
-func (this *JohnsonMerkleSignature) Sign(data *PartitionedData, private_key *crypto.PrivateKey) error {
-	switch (*private_key).(type) {
-	case *ecdsa.PrivateKey:
-		break
-	default:
+func (sig *JohnsonMerkleSignature) Sign(data *PartitionedData, private_key *crypto.PrivateKey) error {
+	ecdsa_private_key, ok := (*private_key).(*ecdsa.PrivateKey)
+	if !ok {
 		return fmt.Errorf("only ECDSA supported atm")
 	}
 
@@ -329,12 +327,12 @@ func (this *JohnsonMerkleSignature) Sign(data *PartitionedData, private_key *cry
 	tree := generateRedactionTree(&node,
 		length,
 		data_padding)
-	signature, _ := ecdsa.SignASN1(rand.Reader, (*private_key).(*ecdsa.PrivateKey), tree.Hash)
-	this.BaseSignature = signature
-	this.PublicKey = (*private_key).(*ecdsa.PrivateKey).PublicKey
-	this.Key = prn
-	this.RedactedHash = nil
-	this.RedactedKeys = nil
+	signature, _ := ecdsa.SignASN1(rand.Reader, ecdsa_private_key, tree.Hash)
+	sig.BaseSignature = signature
+	sig.PublicKey = ecdsa_private_key.PublicKey
+	sig.Key = prn
+	sig.RedactedHash = nil
+	sig.RedactedKeys = nil
 	return nil
 }
 
@@ -383,7 +381,7 @@ func (sig *JohnsonMerkleSignature) Marshal() (string, error) {
 	return string(out_bytes), err
 }
 
-func (this *JohnsonMerkleSignature) Unmarshal(input string) error {
+func (sig *JohnsonMerkleSignature) Unmarshal(input string) error {
 	var sig_serialized johnsonRedactableSignatureSerialized
 	err := json.Unmarshal([]byte(input), &sig_serialized)
 	if err != nil {
@@ -444,11 +442,11 @@ func (this *JohnsonMerkleSignature) Unmarshal(input string) error {
 		return fmt.Errorf("error while decoding Key: %s", err)
 	}
 
-	this.BaseSignature = base_sig
-	this.PublicKey = *pub.(*ecdsa.PublicKey)
-	this.Key = key
-	this.RedactedKeys = redacted_keys
-	this.RedactedHash = redacted_hash
+	sig.BaseSignature = base_sig
+	sig.PublicKey = *pub.(*ecdsa.PublicKey)
+	sig.Key = key
+	sig.RedactedKeys = redacted_keys
+	sig.RedactedHash = redacted_hash
 
 	return nil
 }

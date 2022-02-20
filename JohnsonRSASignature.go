@@ -10,7 +10,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math/big"
 	mathrand "math/rand"
 	"strconv"
@@ -42,7 +41,7 @@ func (sig *JohnsonRSASignature) Marshal() (string, error) {
 	return string(out_bytes), err
 }
 
-func (this *JohnsonRSASignature) Unmarshal(input string) error {
+func (sig *JohnsonRSASignature) Unmarshal(input string) error {
 	var marshaled johnsonRSASignatureSerialized
 	err := json.Unmarshal([]byte(input), &marshaled)
 	if err != nil {
@@ -68,34 +67,11 @@ func (this *JohnsonRSASignature) Unmarshal(input string) error {
 	if err != nil {
 		return fmt.Errorf("error while parsing PublicKey: %s", err)
 	}
-	this.DocumentKey = DocumentKey
-	this.BaseSignature = *BaseSignature
-	this.Generator = *Generator
-	this.PublicKey = *PublicKey
+	sig.DocumentKey = DocumentKey
+	sig.BaseSignature = *BaseSignature
+	sig.Generator = *Generator
+	sig.PublicKey = *PublicKey
 	return nil
-}
-
-func newDetermRand(seed []byte) io.Reader {
-	return &determRand{next: seed}
-}
-
-type determRand struct {
-	next []byte
-}
-
-func (d *determRand) cycle() []byte {
-	result := sha256.Sum256(d.next)
-	d.next = result[:sha256.Size/2]
-	return result[sha256.Size/2:]
-}
-
-func (d *determRand) Read(b []byte) (int, error) {
-	n := 0
-	for n < len(b) {
-		out := d.cycle()
-		n += copy(b[n:], out)
-	}
-	return n, nil
 }
 
 //produces a hash for multiple chunks, based on prime numbers
@@ -114,18 +90,16 @@ func multHOrdered(Input *PartitionedData, Identifier []byte) *big.Int {
 }
 
 //Signs the input data according to the paper
-func (this *JohnsonRSASignature) Sign(data *PartitionedData, private_key *crypto.PrivateKey) error {
-	switch (*private_key).(type) {
-	case *rsa.PrivateKey:
-		break
-	default:
+func (sig *JohnsonRSASignature) Sign(data *PartitionedData, private_key *crypto.PrivateKey) error {
+	rsa_private_key, ok := (*private_key).(*rsa.PrivateKey)
+	if !ok {
 		return fmt.Errorf("only RSA supported atm")
 	}
 
-	phi := getEulerPhi((*private_key).(*rsa.PrivateKey))
+	phi := getEulerPhi(rsa_private_key)
 	//fmt.Println("Beginning with generating coprime...")
 	//v := GenerateCoPrime(random, phi)
-	v := big.NewInt(int64((*private_key).(*rsa.PrivateKey).E))
+	v := big.NewInt(int64(rsa_private_key.E))
 	//fmt.Println("Finished with generating coprime...")
 	identifier_bytes := data.Hash()
 	//fmt.Println("Calculating hash...")
@@ -135,11 +109,11 @@ func (this *JohnsonRSASignature) Sign(data *PartitionedData, private_key *crypto
 	hU.ModInverse(hU, phi)
 	//fmt.Println("Finished with mod inverse...")
 	var vExp big.Int
-	vExp = *vExp.Exp(v, hU, (*private_key).(*rsa.PrivateKey).N)
-	this.DocumentKey = identifier_bytes
-	this.BaseSignature = vExp
-	this.Generator = *v
-	this.PublicKey = (*private_key).(*rsa.PrivateKey).PublicKey
+	vExp = *vExp.Exp(v, hU, rsa_private_key.N)
+	sig.DocumentKey = identifier_bytes
+	sig.BaseSignature = vExp
+	sig.Generator = *v
+	sig.PublicKey = rsa_private_key.PublicKey
 	return nil
 }
 

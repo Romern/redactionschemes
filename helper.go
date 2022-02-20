@@ -120,12 +120,12 @@ func (c PartitionedData) GetRedactedIndicesArray() []int {
 }
 
 //StringToPartitionedData partitions a string s word-wise
-func StringToPartitionedData(s string) PartitionedData {
+func StringToPartitionedData(s string) *PartitionedData {
 	var out PartitionedData
 	for _, v := range strings.Split(s, " ") {
 		out = append(out, []byte(string(v)))
 	}
-	return out
+	return &out
 }
 
 //Base64ImageToByteArray converts a base64-encoded image and converts it to a byte array.
@@ -201,7 +201,7 @@ func (c PartitionedData) ToImage(chunksX int, chunksY int) (image.Image, error) 
 }
 
 //ImagetoPartitionedData converts a html-base64 encoded image into a chunk array with chunksX * chunksY resolution.
-func ImageToPartitionedData(img image.Image, chunksX int, chunksY int) (PartitionedData, error) {
+func ImageToPartitionedData(img image.Image, chunksX int, chunksY int) (*PartitionedData, error) {
 	type subImager interface {
 		SubImage(r image.Rectangle) image.Image
 	}
@@ -228,7 +228,7 @@ func ImageToPartitionedData(img image.Image, chunksX int, chunksY int) (Partitio
 			out[i*chunksX+j] = buf.Bytes()
 		}
 	}
-	return out, nil
+	return &out, nil
 }
 
 //CommaSeperatedIndicesArray takes a comma seperated string of indices and converts it into a slice of indices.
@@ -249,17 +249,17 @@ func CommaSeperatedIndicesArray(s string) ([]int, error) {
 func test(t *testing.T, private_key crypto.PrivateKey, sig RedactableSignature) {
 	dataToSign := StringToPartitionedData("Test Description")
 
-	err := sig.Sign(&dataToSign, &private_key)
+	err := sig.Sign(dataToSign, &private_key)
 	if err != nil {
 		t.Errorf("Failed to sign data! %s", err)
 		return
 	}
-	if err := sig.Verify(&dataToSign); err != nil {
+	if err := sig.Verify(dataToSign); err != nil {
 		t.Errorf("Failed to verify initial data! %s", err)
 		return
 	}
 
-	newSig, err := sig.Redact([]int{1}, &dataToSign)
+	newSig, err := sig.Redact([]int{1}, dataToSign)
 	if err != nil {
 		t.Errorf("Failed to redact signature! %s", err)
 		return

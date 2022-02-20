@@ -29,7 +29,7 @@ type naiveSignatureSerialized struct {
 	PublicKey     string
 }
 
-func (sig NaiveSignature) Verify(data *PartitionedData) error {
+func (sig *NaiveSignature) Verify(data *PartitionedData) error {
 	if sig.Length != len(*data) {
 		return fmt.Errorf("signature length does not match data lengh")
 	}
@@ -57,11 +57,9 @@ func (sig NaiveSignature) Verify(data *PartitionedData) error {
 	return nil
 }
 
-func (this *NaiveSignature) Sign(data *PartitionedData, private_key *crypto.PrivateKey) error {
-	switch (*private_key).(type) {
-	case *ecdsa.PrivateKey:
-		break
-	default:
+func (sig *NaiveSignature) Sign(data *PartitionedData, private_key *crypto.PrivateKey) error {
+	ecdsa_private_key, ok := (*private_key).(*ecdsa.PrivateKey)
+	if !ok {
 		return fmt.Errorf("only ECDSA supported atm")
 	}
 	//Create Identifier based on the hash of the input data:
@@ -71,7 +69,7 @@ func (this *NaiveSignature) Sign(data *PartitionedData, private_key *crypto.Priv
 	base_sig_hash := sha256.New()
 	base_sig_hash.Write(length_bytes)
 	base_sig_hash.Write(identifier_bytes)
-	signature, err := ecdsa.SignASN1(rand.Reader, (*private_key).(*ecdsa.PrivateKey), base_sig_hash.Sum(nil))
+	signature, err := ecdsa.SignASN1(rand.Reader, ecdsa_private_key, base_sig_hash.Sum(nil))
 	if err != nil {
 		return err
 	}
@@ -81,17 +79,17 @@ func (this *NaiveSignature) Sign(data *PartitionedData, private_key *crypto.Priv
 		cur_sig_hash.Write(identifier_bytes)
 		cur_sig_hash.Write(big.NewInt(int64(i)).Bytes())
 		cur_sig_hash.Write((*data)[i])
-		cur_sig, err := ecdsa.SignASN1(rand.Reader, (*private_key).(*ecdsa.PrivateKey), cur_sig_hash.Sum(nil))
+		cur_sig, err := ecdsa.SignASN1(rand.Reader, ecdsa_private_key, cur_sig_hash.Sum(nil))
 		if err != nil {
 			return err
 		}
 		signatures[i] = cur_sig
 	}
-	this.Identifier = identifier_bytes
-	this.Length = len(*data)
-	this.BaseSignature = signature
-	this.Signatures = signatures
-	this.PublicKey = (*private_key).(*ecdsa.PrivateKey).PublicKey
+	sig.Identifier = identifier_bytes
+	sig.Length = len(*data)
+	sig.BaseSignature = signature
+	sig.Signatures = signatures
+	sig.PublicKey = ecdsa_private_key.PublicKey
 	return nil
 }
 
@@ -116,7 +114,7 @@ func (sig *NaiveSignature) Marshal() (string, error) {
 	return string(out), err
 }
 
-func (this *NaiveSignature) Unmarshal(sig_string string) error {
+func (sig *NaiveSignature) Unmarshal(sig_string string) error {
 	var marsh naiveSignatureSerialized
 	err := json.Unmarshal([]byte(sig_string), &marsh)
 	if err != nil {
@@ -146,10 +144,10 @@ func (this *NaiveSignature) Unmarshal(sig_string string) error {
 	if err != nil {
 		return fmt.Errorf("error while parsing PublicKey: %s", err)
 	}
-	this.Identifier = identifier_bytes
-	this.Length = marsh.Length
-	this.BaseSignature = base_sig_bytes
-	this.Signatures = signatures
-	this.PublicKey = *pub.(*ecdsa.PublicKey)
+	sig.Identifier = identifier_bytes
+	sig.Length = marsh.Length
+	sig.BaseSignature = base_sig_bytes
+	sig.Signatures = signatures
+	sig.PublicKey = *pub.(*ecdsa.PublicKey)
 	return nil
 }
