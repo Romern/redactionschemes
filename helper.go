@@ -247,30 +247,34 @@ func CommaSeperatedIndicesArray(s string) ([]int, error) {
 
 //test signs, verifies, redacts, and verifies again.
 func test(t *testing.T, private_key crypto.PrivateKey, sig RedactableSignature) {
-	dataToSign := StringToPartitionedData("Test Description")
+	cur_string := ""
+	for i := 0; i < 100; i++ {
+		dataToSign := StringToPartitionedData(cur_string)
 
-	err := sig.Sign(dataToSign, &private_key)
-	if err != nil {
-		t.Errorf("Failed to sign data! %s", err)
-		return
-	}
-	if err := sig.Verify(dataToSign); err != nil {
-		t.Errorf("Failed to verify initial data! %s", err)
-		return
-	}
+		err := sig.Sign(dataToSign, &private_key)
+		if err != nil {
+			t.Errorf("Failed to sign data! %s", err)
+			return
+		}
+		if err := sig.Verify(dataToSign); err != nil {
+			t.Errorf("Failed to verify initial data! %s", err)
+			return
+		}
 
-	newSig, err := sig.Redact([]int{1}, dataToSign)
-	if err != nil {
-		t.Errorf("Failed to redact signature! %s", err)
-		return
-	}
-	newChunks, err := dataToSign.Redact([]int{1})
-	if err != nil {
-		t.Errorf("Failed to redact data! %s", err)
-		return
-	}
-	if err := newSig.Verify(newChunks); err != nil {
-		t.Errorf("Failed to verify redacted data! %s", err)
-		return
+		newSig, err := sig.Redact([]int{0}, dataToSign)
+		if err != nil {
+			t.Errorf("Failed to redact signature! %s", err)
+			return
+		}
+		newChunks, err := dataToSign.Redact([]int{0})
+		if err != nil {
+			t.Errorf("Failed to redact data! %s", err)
+			return
+		}
+		if err := newSig.Verify(newChunks); err != nil {
+			t.Errorf("Failed to verify redacted data! %s", err)
+			return
+		}
+		cur_string += "A "
 	}
 }
