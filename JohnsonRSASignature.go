@@ -7,12 +7,12 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math/big"
-	mathrand "math/rand"
 	"strconv"
+
+	"github.com/maruel/fortuna"
 )
 
 //As introduced in "Homomorphic Signature Schemes" from Johnson et al.
@@ -80,9 +80,7 @@ func multHOrdered(Input *PartitionedData, Identifier []byte) *big.Int {
 	outNumber := big.NewInt(1)
 	for i, v := range *Input {
 		if len(v) != 0 {
-			data := sha256.Sum256(append(v, append(Identifier, []byte(strconv.Itoa(i))...)...))
-			data_uint := binary.LittleEndian.Uint64(data[:])
-			r, _ := rand.Prime(mathrand.New(mathrand.NewSource(int64(data_uint))), bits)
+			r, _ := rand.Prime(fortuna.NewGenerator(sha256.New(), append(v, append(Identifier, []byte(strconv.Itoa(i))...)...)), bits)
 			outNumber = outNumber.Mul(outNumber, r)
 		}
 	}

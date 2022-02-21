@@ -7,15 +7,14 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	_ "image/png"
-	"math"
-	mathrand "math/rand"
 	"math/bits"
 	"sort"
 	"strconv"
+
+	"github.com/maruel/fortuna"
 )
 
 //As introduced in "Homomorphic Signature Schemes" from Johnson et al.
@@ -45,15 +44,8 @@ type redactedProperty struct {
 
 //Length-doubling pseudorandom generator
 func G(InputBytes []byte) []byte {
-	//Hash the bytes of the input to get a fixed length byte array
-	seed_bytes := sha256.New()
-	seed_bytes.Write(InputBytes)
-	//only use the first 8 bytes, as more is not supported
-	seed := int64(binary.BigEndian.Uint64(seed_bytes.Sum(nil)[:8]))
-
-	mathrand.Seed(seed)
 	prn := make([]byte, len(InputBytes)*2)
-	mathrand.Read(prn)
+	fortuna.NewGenerator(sha256.New(), InputBytes).Read(prn)
 	return prn
 }
 
