@@ -19,9 +19,15 @@ We provide a helper struct ``PartitionedData`` with many helper functions to han
 
 ## TODO
 
-- Make hash function modular.
+- Make hash function modular
+- Make used base signature scheme modular for naive and merkle
 - Probably replace ``PartitionedData`` with something more sensible?
-- Merkle tree-based scheme very convoluted logic
+- Merkle tree-based scheme
+  - Bitstrings very weird way to save nodes position
+  - Implement support for redacting redacted signatures
+- RSA:
+  - Make used prime bits configurable
+  - Is this way to generate the coprimes even sane and safe?
 
 ## Short Description of Each Scheme
 
