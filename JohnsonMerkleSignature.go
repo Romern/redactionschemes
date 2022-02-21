@@ -13,6 +13,7 @@ import (
 	_ "image/png"
 	"math"
 	mathrand "math/rand"
+	"math/bits"
 	"sort"
 	"strconv"
 )
@@ -56,16 +57,31 @@ func G(InputBytes []byte) []byte {
 	return prn
 }
 
-func bitStringToIndex(bitstring string) int64 {
-	i, _ := strconv.ParseInt(bitstring, 2, 64)
-	return i
+func bitStringToIndex(bitstring string, length int) int {
+	is_power_of_two := ((length & (length - 1)) == 0)
+	if is_power_of_two || bitstring[0] == '0' {
+		//only works if all leafs on bottom depth, i.e. length power of 2
+		i, _ := strconv.ParseInt(bitstring, 2, 64)
+		return int(i)
+	}
+	//bitstring[0] == '1', i.e. right site of the tree and possibly partial
+	i := bits.RotateLeft(1, bits.Len(uint(length))-1)
+	irest, _ := strconv.ParseInt(bitstring[1:], 2, 64)
+	return int(i) + int(irest)
+}
+
+func isLowestLevel(bitstring string, length int) bool {
+	bit_length := bits.Len(uint(length))
+	max_size := int(bits.RotateLeft(1, bit_length-1))
+	return length == 1 || (bit_length == len(bitstring) || bitStringToIndex(bitstring+"0", length) >= max_size)
 }
 
 //generateRedactionTree recursively generates the redaction tree
-func generateRedactionTree(parent *johnsonNode, depth int, data *PartitionedData) *johnsonNode {
-	if depth == 0 {
+func generateRedactionTree(parent *johnsonNode, data *PartitionedData) *johnsonNode {
+	// if depth is lowest (does not necessarily need to be 0)
+	if len(*data) == 1 || isLowestLevel(parent.Position, len(*data)) {
 		// we are now at the leaf node and go back up the tree, so we set the data to the leafs
-		parent.Hash = H(append([]byte{0}, append(parent.Key, (*data)[bitStringToIndex(parent.Position)]...)...))
+		parent.Hash = H(append([]byte{0}, append(parent.Key, (*data)[bitStringToIndex(parent.Position, len(*data))]...)...))
 		return parent
 	}
 	new_seed := G(parent.Key)
@@ -76,7 +92,6 @@ func generateRedactionTree(parent *johnsonNode, depth int, data *PartitionedData
 		Parent:   parent,
 		Position: left_position}
 	left := generateRedactionTree(&left_node,
-		depth-1,
 		data)
 
 	right_position := parent.Position + "1"
@@ -85,7 +100,6 @@ func generateRedactionTree(parent *johnsonNode, depth int, data *PartitionedData
 		Parent:   parent,
 		Position: right_position}
 	right := generateRedactionTree(&right_node,
-		depth-1,
 		data)
 
 	parent.Children = map[int]*johnsonNode{0: left, 1: right}
@@ -95,24 +109,24 @@ func generateRedactionTree(parent *johnsonNode, depth int, data *PartitionedData
 }
 
 //calculateHashes recursively calculates the hashes of a tree with partial information
-func calculateHashes(node_bitstring string, redactedKeys map[string]redactedProperty, redactedHash map[string]redactedProperty, data *PartitionedData, lowestLevel int) {
+func calculateHashes(node_bitstring string, redactedKeys map[string]redactedProperty, redactedHash map[string]redactedProperty, data *PartitionedData) {
 	if _, ok := redactedHash[node_bitstring]; ok {
 		//The node was redacted and we already have the hash
 		return
 	}
 
-	if len(node_bitstring) == lowestLevel {
+	if isLowestLevel(node_bitstring, len(*data)) {
 		//We are at the lowest level and need to calculate the leaf hash from the data and key
 		prop := redactedKeys[node_bitstring]
 		prop.Hash = H(append([]byte{0},
-			append(redactedKeys[node_bitstring].Key, (*data)[bitStringToIndex(node_bitstring)]...)...))
+			append(redactedKeys[node_bitstring].Key, (*data)[bitStringToIndex(node_bitstring, len(*data))]...)...))
 		redactedHash[node_bitstring] = prop
 		return
 	}
 
 	//Do this for all child nodes
-	calculateHashes(node_bitstring+"0", redactedKeys, redactedHash, data, lowestLevel)
-	calculateHashes(node_bitstring+"1", redactedKeys, redactedHash, data, lowestLevel)
+	calculateHashes(node_bitstring+"0", redactedKeys, redactedHash, data)
+	calculateHashes(node_bitstring+"1", redactedKeys, redactedHash, data)
 
 	//Else, we just calculate the hash normally using the possibly two child nodes
 	prop := redactedKeys[node_bitstring]
@@ -126,16 +140,12 @@ func calculateHashes(node_bitstring string, redactedKeys map[string]redactedProp
 //Verifies if a given signature matches the supplied data
 //This rebuilds the tree by regenerating the co-node-trees, as well as using the supplied hashes to retrieve the root node hash
 func (sig *JohnsonMerkleSignature) Verify(data *PartitionedData) error {
-	//extend to the length of a 2-pow (TODO: do not require this)
-	length, data_padding := PadChunkArrayToTwoPow(data)
 	//This is the case when the signature is initial, so we have the root key included and can simply verify everything
 	if sig.Key != nil && len(sig.Key) > 0 {
 		main_node := johnsonNode{
 			Key:      sig.Key,
 			Position: ""}
-		tree := generateRedactionTree(&main_node,
-			length,
-			data_padding)
+		tree := generateRedactionTree(&main_node, data)
 		if !ecdsa.VerifyASN1(&sig.PublicKey, tree.Hash, sig.BaseSignature) {
 			return fmt.Errorf("verification failed! (initial signature)")
 		} else {
@@ -154,24 +164,22 @@ func (sig *JohnsonMerkleSignature) Verify(data *PartitionedData) error {
 		return len(positions[i]) > len(positions[j])
 	})
 	//Second step: Calculate the hashes of the co-nodes by building the partial redaction tree
+
 	for _, v := range positions {
 		cur_key := sig.RedactedKeys[v]
-		dataLength := length - len(cur_key.Position)
 
 		//co-nodes have a full partial tree, so calculate it first
 		cur_node := johnsonNode{
 			Key:      cur_key.Key,
 			Position: cur_key.Position}
-		tree := generateRedactionTree(&cur_node,
-			dataLength,
-			data_padding)
+		tree := generateRedactionTree(&cur_node, data)
 
 		cur_key.Hash = tree.Hash
 		sig.RedactedHash[v] = cur_key
 	}
 
 	//Recursively retrive the hash of the other node. We should have all the relevant info at this point
-	calculateHashes("", sig.RedactedKeys, sig.RedactedHash, data, length)
+	calculateHashes("", sig.RedactedKeys, sig.RedactedHash, data)
 
 	//Third step: Verify signature
 	if !ecdsa.VerifyASN1(&sig.PublicKey, sig.RedactedHash[""].Hash, sig.BaseSignature) {
@@ -182,17 +190,18 @@ func (sig *JohnsonMerkleSignature) Verify(data *PartitionedData) error {
 }
 
 //pruneRedactionTree adds all relevant tree nodes needed for the redaction to redactedHashes based on if they are pruned
-func pruneRedactionTree(mismatches map[int]bool, node *johnsonNode, lowestLevel int, redactedHashes map[string]*johnsonNode) {
-	if len(node.Position) == lowestLevel && mismatches[int(bitStringToIndex(node.Position))] {
+func pruneRedactionTree(mismatches map[int]bool, node *johnsonNode, redactedHashes map[string]*johnsonNode, data_length int) {
+	lowest_level := isLowestLevel(node.Position, data_length)
+	if lowest_level && mismatches[int(bitStringToIndex(node.Position, data_length))] {
 		redactedHashes[node.Position] = node
 		return
 	}
 
 	for _, v := range node.Children {
-		pruneRedactionTree(mismatches, v, lowestLevel, redactedHashes)
+		pruneRedactionTree(mismatches, v, redactedHashes, data_length)
 	}
 
-	if len(node.Position) != lowestLevel {
+	if !lowest_level {
 		_, leftChildIn := redactedHashes[node.Children[0].Position]
 		_, rightChildIn := redactedHashes[node.Children[1].Position]
 		if leftChildIn && rightChildIn {
@@ -216,8 +225,6 @@ func (orig_signature *JohnsonMerkleSignature) Redact(redacted_indices []int, dat
 	if err != nil {
 		return nil, fmt.Errorf("data does not match the orig_signature! %s", err)
 	}
-	//extend to the length of a 2-pow (TODO: do not require this)
-	length, data_padding_old := PadChunkArrayToTwoPow(data)
 
 	if orig_signature.Key == nil || len(orig_signature.Key) == 0 {
 		return nil, fmt.Errorf("CURRENTLY REDACTING REDACTED SIGNATURES IS NOT SUPPORTED! Key empty")
@@ -226,9 +233,7 @@ func (orig_signature *JohnsonMerkleSignature) Redact(redacted_indices []int, dat
 	node := johnsonNode{
 		Key:      orig_signature.Key,
 		Position: ""}
-	tree := generateRedactionTree(&node,
-		length,
-		data_padding_old)
+	tree := generateRedactionTree(&node, data)
 
 	if orig_signature.RedactedHash != nil && len(orig_signature.RedactedHash) > 0 {
 		//TODO: It should  be possible to further redact a redaction
@@ -246,7 +251,7 @@ func (orig_signature *JohnsonMerkleSignature) Redact(redacted_indices []int, dat
 	//Check for consecutive redactions:
 	//If all children of a node are redacted, we just give the hash of the parent.
 	//We do this by pruning the nodes from the tree, starting at the lowest level.
-	pruneRedactionTree(redacted_chunks, tree, length, redactedNodes)
+	pruneRedactionTree(redacted_chunks, tree, redactedNodes, len(*data))
 
 	//Retrive Conodes by going up the tree
 	for _, node := range redactedNodes {
@@ -296,19 +301,6 @@ func (orig_signature *JohnsonMerkleSignature) Redact(redacted_indices []int, dat
 	return &out, nil
 }
 
-//PadByteArrayToTwoPow pads a byte array two a length of power of two.
-//This is not actually needed, but makes generating and working with the tree way easier
-func PadChunkArrayToTwoPow(input *PartitionedData) (int, *PartitionedData) {
-	length := int(math.Ceil(math.Log2(float64((len(*input))))))
-	var data_padding PartitionedData
-	data_padding = append(data_padding, *input...)
-
-	for i := 0; i < int(math.Pow(2.0, float64(length)))-len(*input); i++ {
-		data_padding = append(data_padding, []byte{})
-	}
-	return length, &data_padding
-}
-
 //Sign uses the private_key to sign data redactably.
 func (sig *JohnsonMerkleSignature) Sign(data *PartitionedData, private_key *crypto.PrivateKey) error {
 	ecdsa_private_key, ok := (*private_key).(*ecdsa.PrivateKey)
@@ -318,15 +310,10 @@ func (sig *JohnsonMerkleSignature) Sign(data *PartitionedData, private_key *cryp
 
 	prn := data.Hash()
 
-	//extend to the length of a 2-pow (TODO: do not require this)
-	length, data_padding := PadChunkArrayToTwoPow(data)
-
 	node := johnsonNode{
 		Key:      prn,
 		Position: ""}
-	tree := generateRedactionTree(&node,
-		length,
-		data_padding)
+	tree := generateRedactionTree(&node, data)
 	signature, _ := ecdsa.SignASN1(rand.Reader, ecdsa_private_key, tree.Hash)
 	sig.BaseSignature = signature
 	sig.PublicKey = ecdsa_private_key.PublicKey
