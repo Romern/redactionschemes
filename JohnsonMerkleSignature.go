@@ -49,32 +49,30 @@ func G(InputBytes []byte) []byte {
 	return prn
 }
 
-func bitStringToIndex(bitstring string, length int) int {
-	is_power_of_two := ((length & (length - 1)) == 0)
-	if is_power_of_two || bitstring[0] == '0' {
-		//only works if all leafs on bottom depth, i.e. length power of 2
-		i, _ := strconv.ParseInt(bitstring, 2, 64)
-		return int(i)
-	}
-	//bitstring[0] == '1', i.e. right site of the tree and possibly partial
-	i := bits.RotateLeft(1, bits.Len(uint(length))-1)
-	irest, _ := strconv.ParseInt(bitstring[1:], 2, 64)
-	return int(i) + int(irest)
+func bitStringToIndex(bitstring string) int {
+	i, _ := strconv.ParseInt(bitstring, 2, 64)
+	return int(i)
 }
 
 func isLowestLevel(bitstring string, length int) bool {
 	bit_length := bits.Len(uint(length))
-	max_size := int(bits.RotateLeft(1, bit_length-1))
-	return length == 1 || (bit_length == len(bitstring) || bitStringToIndex(bitstring+"0", length) >= max_size)
+	return (length == 1 && len(bitstring) == 0) || bit_length == len(bitstring)
 }
 
 //generateRedactionTree recursively generates the redaction tree
 func generateRedactionTree(parent *johnsonNode, data *PartitionedData) *johnsonNode {
 	// if depth is lowest (does not necessarily need to be 0)
-	if len(*data) == 1 || isLowestLevel(parent.Position, len(*data)) {
+	if isLowestLevel(parent.Position, len(*data)) {
 		// we are now at the leaf node and go back up the tree, so we set the data to the leafs
-		parent.Hash = H(append([]byte{0}, append(parent.Key, (*data)[bitStringToIndex(parent.Position, len(*data))]...)...))
-		return parent
+		index := bitStringToIndex(parent.Position)
+		if index >= len(*data) {
+			//this is the case when the data is not of length 2^n and we need padding
+			parent.Hash = H(append([]byte{0}, append(parent.Key, []byte{}...)...))
+			return parent
+		} else {
+			parent.Hash = H(append([]byte{0}, append(parent.Key, (*data)[index]...)...))
+			return parent
+		}
 	}
 	new_seed := G(parent.Key)
 
@@ -110,8 +108,14 @@ func calculateHashes(node_bitstring string, redactedKeys map[string]redactedProp
 	if isLowestLevel(node_bitstring, len(*data)) {
 		//We are at the lowest level and need to calculate the leaf hash from the data and key
 		prop := redactedKeys[node_bitstring]
-		prop.Hash = H(append([]byte{0},
-			append(redactedKeys[node_bitstring].Key, (*data)[bitStringToIndex(node_bitstring, len(*data))]...)...))
+		index := bitStringToIndex(node_bitstring)
+		if index >= len(*data) {
+			prop.Hash = H(append([]byte{0},
+				append(redactedKeys[node_bitstring].Key, []byte{}...)...))
+		} else {
+			prop.Hash = H(append([]byte{0},
+				append(redactedKeys[node_bitstring].Key, (*data)[index]...)...))
+		}
 		redactedHash[node_bitstring] = prop
 		return
 	}
@@ -145,6 +149,15 @@ func (sig *JohnsonMerkleSignature) Verify(data *PartitionedData) error {
 		}
 	}
 	//Else, we need to build the partial tree by using RedactedKeys and RedactedHash
+
+	//First, check if redacted hashes are actually redacted:
+	for k, _ := range sig.RedactedHash {
+		index := bitStringToIndex(k)
+		if index <= len(*data) && isLowestLevel(k, len(*data)) && len((*data)[index]) != 0 {
+			//check if data is actually empty
+			return fmt.Errorf("redacted datapoint not acutally redacted")
+		}
+	}
 
 	//First step: sig.RedactedKeys contains all relevant co-nodes, which we need to compute in order from lowest depth to highest, so we sort it:
 	positions := make([]string, 0, len(sig.RedactedKeys))
@@ -184,7 +197,7 @@ func (sig *JohnsonMerkleSignature) Verify(data *PartitionedData) error {
 //pruneRedactionTree adds all relevant tree nodes needed for the redaction to redactedHashes based on if they are pruned
 func pruneRedactionTree(mismatches map[int]bool, node *johnsonNode, redactedHashes map[string]*johnsonNode, data_length int) {
 	lowest_level := isLowestLevel(node.Position, data_length)
-	if lowest_level && mismatches[int(bitStringToIndex(node.Position, data_length))] {
+	if lowest_level && mismatches[int(bitStringToIndex(node.Position))] {
 		redactedHashes[node.Position] = node
 		return
 	}
