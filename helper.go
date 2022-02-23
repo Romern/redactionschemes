@@ -248,62 +248,66 @@ func CommaSeperatedIndicesArray(s string) ([]int, error) {
 //test signs, verifies, redacts, and verifies again.
 func test(t *testing.T, private_key crypto.PrivateKey, sig RedactableSignature) {
 	cur_string := ""
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 100; i++ {
 		t.Log(i)
 		dataToSign := StringToPartitionedData(cur_string)
 		dataToSign_wrong := StringToPartitionedData(cur_string + "test")
+		redacted_chunks := make([]int, len(*dataToSign)/2)
+		for i := 0; i < len(*dataToSign)/2; i++ {
+			redacted_chunks[i] = i * 2
+		}
 
 		err := sig.Sign(dataToSign, &private_key)
 		if err != nil {
 			t.Errorf("Failed to sign data! %s", err)
-			return
+			continue
 		}
 		sig_marshaled, err := sig.Marshal()
 		if err != nil {
 			t.Errorf("Failed to marshal initial signature! %s", err)
-			return
+			continue
 		}
 		err = sig.Unmarshal(sig_marshaled)
 		if err != nil {
 			t.Errorf("Failed to unmarshal initial signature! %s", err)
-			return
+			continue
 		}
 		if err := sig.Verify(dataToSign); err != nil {
 			t.Errorf("Failed to verify initial signature! %s", err)
-			return
+			continue
 		}
 		if err := sig.Verify(dataToSign_wrong); err == nil {
 			t.Errorf("Succeeded to verify initial signature with wrong data! %s", err)
-			return
+			continue
 		}
 
-		newSig, err := sig.Redact([]int{0}, dataToSign)
+		newSig, err := sig.Redact(redacted_chunks, dataToSign)
 		if err != nil {
 			t.Errorf("Failed to redact signature! %s", err)
-			return
+			continue
 		}
 		sig_marshaled, err = sig.Marshal()
 		if err != nil {
 			t.Errorf("Failed to marshal redacted signature! %s", err)
-			return
+			continue
 		}
 		err = sig.Unmarshal(sig_marshaled)
 		if err != nil {
 			t.Errorf("Failed to unmarshal redacted signature! %s", err)
-			return
+			continue
 		}
-		newChunks, err := dataToSign.Redact([]int{0})
+		newChunks, err := dataToSign.Redact(redacted_chunks)
 		if err != nil {
 			t.Errorf("Failed to redact data! %s", err)
-			return
+			continue
 		}
 		if err := newSig.Verify(newChunks); err != nil {
 			t.Errorf("Failed to verify redacted signature! %s", err)
-			return
+			continue
 		}
 		if err := newSig.Verify(dataToSign_wrong); err == nil {
 			t.Errorf("Succeeded to verify redacted signature with wrong data! %s", err)
-			return
+			continue
 		}
 		cur_string += "A "
 	}
