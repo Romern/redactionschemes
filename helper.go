@@ -256,6 +256,7 @@ func test(t *testing.T, private_key crypto.PrivateKey, sig RedactableSignature) 
 		for i := 0; i < len(*dataToSign)/2; i++ {
 			redacted_chunks[i] = i * 2
 		}
+		cur_string += "A "
 
 		err := sig.Sign(dataToSign, &private_key)
 		if err != nil {
@@ -286,12 +287,12 @@ func test(t *testing.T, private_key crypto.PrivateKey, sig RedactableSignature) 
 			t.Errorf("Failed to redact signature! %s", err)
 			continue
 		}
-		sig_marshaled, err = sig.Marshal()
+		sig_marshaled, err = newSig.Marshal()
 		if err != nil {
 			t.Errorf("Failed to marshal redacted signature! %s", err)
 			continue
 		}
-		err = sig.Unmarshal(sig_marshaled)
+		err = newSig.Unmarshal(sig_marshaled)
 		if err != nil {
 			t.Errorf("Failed to unmarshal redacted signature! %s", err)
 			continue
@@ -309,6 +310,38 @@ func test(t *testing.T, private_key crypto.PrivateKey, sig RedactableSignature) 
 			t.Errorf("Succeeded to verify redacted signature with wrong data! %s", err)
 			continue
 		}
-		cur_string += "A "
+
+		if i <= 2 {
+			continue
+		}
+		redacted_chunks_again := []int{1}
+		newnewSig, err := newSig.Redact(redacted_chunks_again, newChunks)
+		if err != nil {
+			t.Errorf("Failed to redact² signature! %s", err)
+			continue
+		}
+		sig_marshaled, err = newnewSig.Marshal()
+		if err != nil {
+			t.Errorf("Failed to marshal redacted² signature! %s", err)
+			continue
+		}
+		err = newnewSig.Unmarshal(sig_marshaled)
+		if err != nil {
+			t.Errorf("Failed to unmarshal redacted² signature! %s", err)
+			continue
+		}
+		newnewChunks, err := newChunks.Redact(redacted_chunks_again)
+		if err != nil {
+			t.Errorf("Failed to redact² data! %s", err)
+			continue
+		}
+		if err := newnewSig.Verify(newnewChunks); err != nil {
+			t.Errorf("Failed to verify redacted² signature! %s", err)
+			continue
+		}
+		if err := newnewSig.Verify(dataToSign_wrong); err == nil {
+			t.Errorf("Succeeded to verify redacted² signature with wrong data! %s", err)
+			continue
+		}
 	}
 }
