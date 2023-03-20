@@ -42,7 +42,7 @@ type redactedProperty struct {
 	Position string
 }
 
-//Length-doubling pseudorandom generator
+// Length-doubling pseudorandom generator
 func G(InputBytes []byte) []byte {
 	prn := make([]byte, len(InputBytes)*2)
 	fortuna.NewGenerator(sha256.New(), InputBytes).Read(prn)
@@ -59,7 +59,7 @@ func isLowestLevel(bitstring string, length int) bool {
 	return (length == 1 && len(bitstring) == 0) || bit_length == len(bitstring)
 }
 
-//generateRedactionTree recursively generates the redaction tree
+// generateRedactionTree recursively generates the redaction tree
 func generateRedactionTree(parent *johnsonNode, data *PartitionedData) *johnsonNode {
 	// if depth is lowest (does not necessarily need to be 0)
 	if isLowestLevel(parent.Position, len(*data)) {
@@ -98,7 +98,7 @@ func generateRedactionTree(parent *johnsonNode, data *PartitionedData) *johnsonN
 	return parent
 }
 
-//calculateHashes recursively calculates the hashes of a tree with partial information
+// calculateHashes recursively calculates the hashes of a tree with partial information
 func calculateHashes(node_bitstring string, redactedKeys map[string]redactedProperty, redactedHash map[string]redactedProperty, data *PartitionedData) {
 	if _, ok := redactedHash[node_bitstring]; ok {
 		//The node was redacted and we already have the hash
@@ -133,8 +133,8 @@ func calculateHashes(node_bitstring string, redactedKeys map[string]redactedProp
 	redactedHash[node_bitstring] = prop
 }
 
-//Verifies if a given signature matches the supplied data
-//This rebuilds the tree by regenerating the co-node-trees, as well as using the supplied hashes to retrieve the root node hash
+// Verifies if a given signature matches the supplied data
+// This rebuilds the tree by regenerating the co-node-trees, as well as using the supplied hashes to retrieve the root node hash
 func (sig *JohnsonMerkleSignature) Verify(data *PartitionedData) error {
 	//This is the case when the signature is initial, so we have the root key included and can simply verify everything
 	if sig.Key != nil && len(sig.Key) > 0 {
@@ -194,7 +194,7 @@ func (sig *JohnsonMerkleSignature) Verify(data *PartitionedData) error {
 	}
 }
 
-//pruneRedactionTree adds all relevant tree nodes needed for the redaction to redactedHashes based on if they are pruned
+// pruneRedactionTree adds all relevant tree nodes needed for the redaction to redactedHashes based on if they are pruned
 func pruneRedactionTree(mismatches map[int]bool, node *johnsonNode, redactedHashes map[string]*johnsonNode, data_length int) {
 	lowest_level := isLowestLevel(node.Position, data_length)
 	if lowest_level && mismatches[int(bitStringToIndex(node.Position))] {
@@ -217,22 +217,23 @@ func pruneRedactionTree(mismatches map[int]bool, node *johnsonNode, redactedHash
 	}
 }
 
-//Redacts an existing signature based on data.
-//When redacting, k_epsilon is not publicsed, as with it we could just calculate all the hashes
-//and possibly get access to the redacted data by bruteforcing or similar.
-//Instead, we just publicise the co-nodes keys, as well as the parent node of the redacted leaf
+// Redacts an existing signature based on data.
+// When redacting, k_epsilon is not publicsed, as with it we could just calculate all the hashes
+// and possibly get access to the redacted data by bruteforcing or similar.
+// Instead, we just publicise the co-nodes keys, as well as the parent node of the redacted leaf
 func (orig_signature *JohnsonMerkleSignature) Redact(redacted_indices []int, data *PartitionedData) (RedactableSignature, error) {
 	something_is_redacted := len(redacted_indices) > 0
 	if !something_is_redacted {
 		return orig_signature, nil
 	}
-	err := orig_signature.Verify(data)
-	if err != nil {
-		return nil, fmt.Errorf("data does not match the orig_signature! %s", err)
-	}
 
 	if orig_signature.Key == nil || len(orig_signature.Key) == 0 {
 		return nil, fmt.Errorf("CURRENTLY REDACTING REDACTED SIGNATURES IS NOT SUPPORTED! Key empty")
+	}
+
+	err := orig_signature.Verify(data)
+	if err != nil {
+		return nil, fmt.Errorf("data does not match the orig_signature! %s", err)
 	}
 
 	node := johnsonNode{
@@ -306,7 +307,7 @@ func (orig_signature *JohnsonMerkleSignature) Redact(redacted_indices []int, dat
 	return &out, nil
 }
 
-//Sign uses the private_key to sign data redactably.
+// Sign uses the private_key to sign data redactably.
 func (sig *JohnsonMerkleSignature) Sign(data *PartitionedData, private_key *crypto.PrivateKey) error {
 	ecdsa_private_key, ok := (*private_key).(*ecdsa.PrivateKey)
 	if !ok {
