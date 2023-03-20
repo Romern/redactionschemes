@@ -2,13 +2,14 @@ package redactionschemes
 
 import (
 	"crypto"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"strconv"
 
@@ -74,20 +75,65 @@ func (sig *JohnsonRSASignature) Unmarshal(input string) error {
 	return nil
 }
 
-//produces a hash for multiple chunks, based on prime numbers
+// From crypto/rand/util.go
+// without mayberead to make this thing deterministic
+func Prime(rand io.Reader, bits int) (*big.Int, error) {
+	if bits < 2 {
+		return nil, errors.New("crypto/rand: prime size must be at least 2-bit")
+	}
+
+	b := uint(bits % 8)
+	if b == 0 {
+		b = 8
+	}
+
+	bytes := make([]byte, (bits+7)/8)
+	p := new(big.Int)
+
+	for {
+		if _, err := io.ReadFull(rand, bytes); err != nil {
+			return nil, err
+		}
+
+		// Clear bits in the first byte to make sure the candidate has a size <= bits.
+		bytes[0] &= uint8(int(1<<b) - 1)
+		// Don't let the value be too small, i.e, set the most significant two bits.
+		// Setting the top two bits, rather than just the top bit,
+		// means that when two of these values are multiplied together,
+		// the result isn't ever one bit short.
+		if b >= 2 {
+			bytes[0] |= 3 << (b - 2)
+		} else {
+			// Here b==1, because b cannot be zero.
+			bytes[0] |= 1
+			if len(bytes) > 1 {
+				bytes[1] |= 0x80
+			}
+		}
+		// Make the value odd since an even number this large certainly isn't prime.
+		bytes[len(bytes)-1] |= 1
+
+		p.SetBytes(bytes)
+		if p.ProbablyPrime(20) {
+			return p, nil
+		}
+	}
+}
+
+// produces a hash for multiple chunks, based on prime numbers
 func multHOrdered(Input *PartitionedData, Identifier []byte) *big.Int {
 	bits := 256
 	outNumber := big.NewInt(1)
 	for i, v := range *Input {
 		if len(v) != 0 {
-			r, _ := rand.Prime(fortuna.NewGenerator(sha256.New(), append(v, append(Identifier, []byte(strconv.Itoa(i))...)...)), bits)
+			r, _ := Prime(fortuna.NewGenerator(sha256.New(), append(v, append(Identifier, []byte(strconv.Itoa(i))...)...)), bits)
 			outNumber = outNumber.Mul(outNumber, r)
 		}
 	}
 	return outNumber
 }
 
-//Signs the input data according to the paper
+// Signs the input data according to the paper
 func (sig *JohnsonRSASignature) Sign(data *PartitionedData, private_key *crypto.PrivateKey) error {
 	rsa_private_key, ok := (*private_key).(*rsa.PrivateKey)
 	if !ok {
@@ -115,7 +161,7 @@ func (sig *JohnsonRSASignature) Sign(data *PartitionedData, private_key *crypto.
 	return nil
 }
 
-//Redacts an existing signature by mutliplying it with the removed hashes
+// Redacts an existing signature by mutliplying it with the removed hashes
 func (sig *JohnsonRSASignature) Redact(redacted_indices []int, data *PartitionedData) (RedactableSignature, error) {
 	var temp big.Int
 	var newV big.Int
@@ -140,7 +186,7 @@ func (sig *JohnsonRSASignature) Redact(redacted_indices []int, data *Partitioned
 	return &new_sig, nil
 }
 
-//Verifies a signature according to the paper
+// Verifies a signature according to the paper
 func (sig *JohnsonRSASignature) Verify(data *PartitionedData) error {
 	var v big.Int
 	hash := multHOrdered(data, sig.DocumentKey)
