@@ -11,13 +11,15 @@ import (
 	"fmt"
 	_ "image/png"
 	"math/big"
+
+	"golang.org/x/exp/maps"
 )
 
 type NaiveSignature struct {
 	Identifier    []byte
 	Length        int
 	BaseSignature []byte
-	Signatures    [][]byte
+	Signatures    map[int][]byte
 	PublicKey     ecdsa.PublicKey
 }
 
@@ -25,7 +27,7 @@ type naiveSignatureSerialized struct {
 	Identifier    string
 	Length        int
 	BaseSignature string
-	Signature     []string
+	Signature     map[int]string
 	PublicKey     string
 }
 
@@ -43,15 +45,16 @@ func (sig *NaiveSignature) Verify(data *PartitionedData) error {
 		return fmt.Errorf("verifying of base signature failed")
 	}
 	for i := 0; i < len(*data); i++ {
-		if len((*data)[i]) != 0 {
-			cur_sig_hash := sha256.New()
-			cur_sig_hash.Write(identifier_bytes)
-			cur_sig_hash.Write(big.NewInt(int64(i)).Bytes())
-			cur_sig_hash.Write((*data)[i])
-			verified := ecdsa.VerifyASN1(&sig.PublicKey, cur_sig_hash.Sum(nil), sig.Signatures[i])
-			if !verified {
-				return fmt.Errorf("verifying of a partition failed")
-			}
+		if len((*data)[i]) == 0 {
+			continue
+		}
+		cur_sig_hash := sha256.New()
+		cur_sig_hash.Write(identifier_bytes)
+		cur_sig_hash.Write(big.NewInt(int64(i)).Bytes())
+		cur_sig_hash.Write((*data)[i])
+		verified := ecdsa.VerifyASN1(&sig.PublicKey, cur_sig_hash.Sum(nil), sig.Signatures[i])
+		if !verified {
+			return fmt.Errorf("verifying of a partition failed")
 		}
 	}
 	return nil
@@ -73,7 +76,7 @@ func (sig *NaiveSignature) Sign(data *PartitionedData, private_key *crypto.Priva
 	if err != nil {
 		return err
 	}
-	signatures := make([][]byte, len(*data))
+	signatures := make(map[int][]byte)
 	for i := 0; i < len(*data); i++ {
 		cur_sig_hash := sha256.New()
 		cur_sig_hash.Write(identifier_bytes)
@@ -94,13 +97,20 @@ func (sig *NaiveSignature) Sign(data *PartitionedData, private_key *crypto.Priva
 }
 
 func (sig *NaiveSignature) Redact(redacted_indices []int, data *PartitionedData) (RedactableSignature, error) {
-	return sig, nil
+	new_signatures := make(map[int][]byte)
+	maps.Copy(new_signatures, sig.Signatures)
+	for _, i := range redacted_indices {
+		if _, ok := new_signatures[i]; ok {
+			delete(new_signatures, i)
+		}
+	}
+	return &NaiveSignature{sig.Identifier, sig.Length, sig.BaseSignature, new_signatures, sig.PublicKey}, nil
 }
 
 func (sig *NaiveSignature) Marshal() (string, error) {
-	signatures := make([]string, len(sig.Signatures))
-	for i := 0; i < len(sig.Signatures); i++ {
-		signatures[i] = base64.StdEncoding.EncodeToString(sig.Signatures[i])
+	signatures := make(map[int]string)
+	for i, v := range sig.Signatures {
+		signatures[i] = base64.StdEncoding.EncodeToString(v)
 	}
 	marsh_pub_key, _ := x509.MarshalPKIXPublicKey(&sig.PublicKey)
 	marsh := naiveSignatureSerialized{
@@ -128,9 +138,9 @@ func (sig *NaiveSignature) Unmarshal(sig_string string) error {
 	if err != nil {
 		return err
 	}
-	signatures := make([][]byte, len(marsh.Signature))
-	for i := 0; i < len(marsh.Signature); i++ {
-		sig_bytes, err := base64.StdEncoding.DecodeString(marsh.Signature[i])
+	signatures := make(map[int][]byte)
+	for i, v := range marsh.Signature {
+		sig_bytes, err := base64.StdEncoding.DecodeString(v)
 		if err != nil {
 			return err
 		}
